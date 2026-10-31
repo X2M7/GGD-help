@@ -1,4 +1,7 @@
-/node_modules/*
-/out/*
-
-/package-lock.json
+/node_modules/
+/out/
+/artifacts/
+/release/
+/dist/
+/.idea/
+*.log

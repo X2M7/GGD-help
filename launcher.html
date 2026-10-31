@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; connect-src 'none'">
+  <title>GGD-help · 悬浮开关</title>
+  <link rel="stylesheet" href="launcher.css">
+</head>
+<body>
+  <div class="launcher">
+    <div class="drag-handle" title="GGD-help V0.1.0 · 拖动此处移动开关" aria-label="拖动移动开关">⠿</div>
+    <button id="toggle" class="toggle" type="button" title="Ctrl+Shift+G 显示或收起蒙版" aria-pressed="true">
+      <span class="indicator" aria-hidden="true"></span><span id="toggle-label">收起蒙版</span>
+    </button>
+    <button id="lock" class="lock" type="button" title="Ctrl+Shift+L 切换鼠标穿透" aria-pressed="false">穿透</button>
+    <button id="menu" class="menu" type="button" title="显示器、找回开关、退出" aria-label="更多操作">⋯</button>
+  </div>
+  <p id="status" aria-live="polite">编辑中 · Ctrl+Shift+G 开关</p>
+  <script src="launcher.js"></script>
+</body>
+</html>

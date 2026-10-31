@@ -1,0 +1,17 @@
+:root { color-scheme: dark; font-family: "Microsoft YaHei", system-ui, sans-serif; }
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; user-select: none; }
+body { padding: 3px; }
+.launcher { height: 40px; display: flex; align-items: center; gap: 2px; padding: 3px 5px 3px 0; border: 1px solid #45665a; border-radius: 13px; background: rgba(14, 25, 26, .96); box-shadow: 0 1px 4px #0006; }
+.drag-handle { -webkit-app-region: drag; width: 25px; flex-shrink: 0; font-size: 24px; color: #879d98; text-align: center; cursor: grab; }
+button { -webkit-app-region: no-drag; height: 30px; border: 0; border-radius: 8px; background: transparent; color: #e9f5f0; font-size: 12px; font-weight: 600; cursor: pointer; padding: 0 8px; }
+button:hover { background: #31463e; }
+button:focus-visible { outline: 2px solid #9be4bb; outline-offset: -2px; }
+.toggle { display: flex; align-items: center; justify-content: center; gap: 7px; flex: 1; background: #294939; }
+.toggle[aria-pressed="false"] { background: #29333a; }
+.indicator { width: 7px; height: 7px; border-radius: 50%; background: #a6e7bc; }
+.toggle[aria-pressed="false"] .indicator { background: #7e939c; }
+.lock { min-width: 48px; }
+.lock[aria-pressed="true"] { background: #5c4929; color: #ffe2ac; }
+.menu { width: 28px; padding: 0; font-size: 20px; }
+#status { margin: 2px auto 0; padding: 1px 7px; width: fit-content; max-width: 100%; border-radius: 6px; font-size: 10px; line-height: 14px; color: #d0ded9; background: rgba(14, 25, 26, .9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
