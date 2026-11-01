@@ -1,7 +1,7 @@
 @echo off
 cd /d "%~dp0"
-if exist "release\GGD-help-V0.1.0-win-x64.exe" (
-  start "" "release\GGD-help-V0.1.0-win-x64.exe"
+if exist "release\GGD-help-V0.1.1-win-x64.exe" (
+  start "" "release\GGD-help-V0.1.1-win-x64.exe"
   exit /b
 )
 if exist "out\GGD-help-win32-x64\GGD-help.exe" (

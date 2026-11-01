@@ -117,27 +117,57 @@ async function main() {
     const card = overlay.locator('.player-card[data-player-id="1"]');
     await card.waitFor({ state: 'visible' });
     assert.equal(await overlay.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgba(0, 0, 0, 0)');
-    const capture = await application.evaluate(async ({ BrowserWindow }) => {
+    assert.equal(await overlay.locator('.player-name, .player-number').count(), 0, 'player number and nickname controls are removed');
+    assert.equal(await overlay.locator('.player-card .role-select').count(), 48, 'every player has three independent identity selectors');
+    const transparentBands = await overlay.evaluate(() => ({
+      viewport: { width: innerWidth, height: innerHeight },
+      points: Array.from(document.querySelectorAll('.player-card')).map(element => {
+        const rect = element.getBoundingClientRect();
+        const controls = element.querySelector('.player-controls').getBoundingClientRect();
+        const point = { x: rect.left + rect.width / 2, y: (rect.top + controls.top) / 2 };
+        const hit = document.elementFromPoint(point.x, point.y);
+        return { ...point, gap: controls.top - rect.top, interactive: Boolean(hit?.closest('[data-interactive]')) };
+      }),
+    }));
+    for (const point of transparentBands.points) {
+      assert.ok(point.gap > 0, 'the former name row remains an empty band above the controls');
+      assert.equal(point.interactive, false, 'the empty name row does not intercept DOM pointer hit-testing');
+    }
+    const capture = await application.evaluate(async ({ BrowserWindow }, bands) => {
       const win = BrowserWindow.getAllWindows().find(item => /\/index\.html/.test(item.webContents.getURL()));
       const image = await win.webContents.capturePage();
       const bitmap = image.toBitmap();
+      const size = image.getSize();
       let transparent = 0;
       let painted = 0;
       for (let i = 3; i < bitmap.length; i += 4) {
         if (bitmap[i] === 0) transparent += 1;
         if (bitmap[i] > 0) painted += 1;
       }
-      return { transparent, painted, size: image.getSize(), png: image.toPNG().toString('base64') };
-    });
+      const nameBandAlpha = bands.points.map(point => {
+        const x = Math.floor(point.x * size.width / bands.viewport.width);
+        const y = Math.floor(point.y * size.height / bands.viewport.height);
+        return bitmap[(y * size.width + x) * 4 + 3];
+      });
+      return { transparent, painted, size, nameBandAlpha, png: image.toPNG().toString('base64') };
+    }, transparentBands);
     await fs.writeFile(path.join(artifacts, 'overlay-native.png'), Buffer.from(capture.png, 'base64'));
     console.log(`Native capture: ${capture.size.width}x${capture.size.height}; ${capture.transparent} transparent pixels, ${capture.painted} painted pixels.`);
     assert.ok(capture.transparent > 100 && capture.painted > 100, 'native compositor preserves transparent empty regions');
+    assert.deepEqual(capture.nameBandAlpha, Array(16).fill(0), 'every former nickname row is fully transparent in the native compositor');
     assert.equal(await overlay.locator('.player-card').count(), 16);
     await overlay.locator('#round-input').fill('3');
     await overlay.locator('#round-input').press('Tab');
-    await card.locator('.player-name').fill('测试玩家');
-    await card.locator('.role-select').selectOption({ label: '警长' });
+    await card.locator('.role-select[data-role-group="good"]').selectOption({ label: '警长' });
+    await card.locator('.role-select[data-role-group="neutral"]').selectOption({ label: '呆呆' });
+    await card.locator('.role-select[data-role-group="bad"]').selectOption({ label: '刺客' });
     await card.locator('.player-notes').fill('第三轮发言，待核实');
+    await card.locator('.player-notes-extra').fill('另一条独立线索：与五号同行');
+    await overlay.waitForFunction(() => {
+      const player = JSON.parse(localStorage.getItem('goose-duck-overlay:v2')).session.players[0];
+      return player.roles.good === '警长' && player.roles.neutral === '呆呆' && player.roles.bad === '刺客'
+        && player.notes === '第三轮发言，待核实' && player.notes2 === '另一条独立线索：与五号同行';
+    });
     await card.locator('[data-cause="刀杀"]').click();
     await overlay.waitForFunction(() => {
       const player = JSON.parse(localStorage.getItem('goose-duck-overlay:v2')).session.players[0];
@@ -223,7 +253,11 @@ async function main() {
     assert.deepEqual(restored.session, saved.session, 'meeting, identity, notes and death records survive restart');
     assert.deepEqual(restored.profiles, saved.profiles, 'calibrated positions survive restart');
     const restoredCard = running.overlay.locator('.player-card[data-player-id="1"]');
-    assert.equal(await restoredCard.locator('.player-name').inputValue(), '测试玩家');
+    assert.equal(await restoredCard.locator('.role-select[data-role-group="good"]').inputValue(), '警长');
+    assert.equal(await restoredCard.locator('.role-select[data-role-group="neutral"]').inputValue(), '呆呆');
+    assert.equal(await restoredCard.locator('.role-select[data-role-group="bad"]').inputValue(), '刺客');
+    assert.equal(await restoredCard.locator('.player-notes').inputValue(), '第三轮发言，待核实');
+    assert.equal(await restoredCard.locator('.player-notes-extra').inputValue(), '另一条独立线索：与五号同行');
     assert.equal(await restoredCard.locator('.death-round').inputValue(), '4');
     const restoredBounds = await restoredCard.boundingBox();
     assert.ok(Math.abs(restoredBounds.x - after.x) < 3 && Math.abs(restoredBounds.y - after.y) < 3, 'restored coordinates are applied');
@@ -231,12 +265,14 @@ async function main() {
     await running.overlay.locator('#confirm-new-game').click();
     await running.overlay.waitForFunction(() => {
       const session = JSON.parse(localStorage.getItem('goose-duck-overlay:v2')).session;
-      return session.round === 1 && session.players.every(player => player.death === null && !player.name && !player.role && !player.notes);
+      return session.round === 1 && session.players.every(player => player.death === null
+        && !player.name && !player.role && !player.roles.good && !player.roles.neutral && !player.roles.bad
+        && !player.notes && !player.notes2);
     });
     const reset = await running.overlay.evaluate(() => JSON.parse(localStorage.getItem('goose-duck-overlay:v2')));
     assert.deepEqual(reset.profiles, saved.profiles, 'starting a new match preserves screen calibration');
     assert.deepEqual(errors, [], 'no renderer errors');
-    console.log('Electron smoke test passed: native transparent windows, display bounds, identities, death rounds, revival, calibration drag, lock, visibility, restart persistence and match reset.');
+    console.log('Electron smoke test passed: native transparent name rows, independent good/neutral/bad identities, two note fields, display bounds, death rounds, revival, calibration drag, lock, visibility, restart persistence and match reset.');
   } catch (error) {
     if (running) {
       for (const [name, page] of [['overlay', running.overlay], ['launcher', running.launcher]]) {

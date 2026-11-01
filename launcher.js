@@ -12,7 +12,7 @@ function render(next) {
   lock.title = state.locked ? '当前鼠标穿透 · 点击恢复编辑' : '点击使鼠标穿透到游戏';
   const error = state.shortcutErrors?.[0] || state.persistenceError;
   status.textContent = error || `${state.visible ? (state.locked ? '穿透中' : '编辑中') : '已收起'} · Ctrl+Shift+G 开关`;
-  status.title = error || 'GGD-help V0.1.0 · 拖动左侧六点可移动开关';
+  status.title = error || 'GGD-help V0.1.1 · 拖动左侧六点可移动开关';
 }
 
 function report(error) {

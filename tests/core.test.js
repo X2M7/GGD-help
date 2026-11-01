@@ -14,7 +14,11 @@ test('16 independent player records and normalized imported records', () => {
   assert.equal(session.players.length, 16);
   assert.equal(session.round, 1);
   session.players[0].notes = '侦探查过';
+  session.players[0].roles.good = '侦探';
+  session.players[0].notes2 = '等下一轮确认';
   assert.equal(session.players[1].notes, '');
+  assert.equal(session.players[1].notes2, '');
+  assert.deepEqual(session.players[1].roles, { good: '', neutral: '', bad: '' });
   assert.deepEqual(core.normalizeSession(null), core.createSession());
   assert.deepEqual(core.normalizeSession([]), core.createSession());
 });
@@ -30,15 +34,63 @@ test('recorded death round is independent of later meeting rounds and cause chan
   assert.deepEqual(killed.players[3].death, { round: 3, cause: '刀杀' });
 });
 
-test('reviving clears death while retaining role and notes', () => {
+test('round changes and revival retain three independent role guesses and two notes', () => {
   const session = core.createSession();
-  Object.assign(session.players[6], { name: '小蓝', role: '警长', notes: '第2轮跳警长' });
+  Object.assign(session.players[6], {
+    name: '小蓝', role: '警长', roles: { good: '警长', neutral: '呆呆', bad: '刺客' },
+    notes: '第2轮跳警长', notes2: '下一轮对照发言',
+  });
   const dead = core.setDeath(session, 7, 2, '投票出局');
-  const alive = core.revivePlayer(dead, 7);
+  const alive = core.revivePlayer(core.setRound(dead, 3), 7);
   assert.equal(alive.players[6].death, null);
   assert.equal(alive.players[6].role, '警长');
+  assert.deepEqual(alive.players[6].roles, { good: '警长', neutral: '呆呆', bad: '刺客' });
   assert.equal(alive.players[6].notes, '第2轮跳警长');
+  assert.equal(alive.players[6].notes2, '下一轮对照发言');
+  assert.deepEqual(session.players[6].roles, { good: '警长', neutral: '呆呆', bad: '刺客' });
+  assert.notEqual(alive.players[6].roles, session.players[6].roles);
   assert.equal(dead.players[6].death.cause, '投票出局');
+});
+
+test('legacy single-role records migrate to the matching camp without losing notes or names', () => {
+  const result = core.normalizeSession({ players: [
+    { id: 1, name: '旧昵称', role: '警长', notes: '旧备注' },
+    { id: 2, role: '鹈鹕' },
+    { id: 3, role: '刺客' },
+    { id: 4, role: '自定义旧身份' },
+  ] });
+  assert.deepEqual(result.players[0].roles, { good: '警长', neutral: '', bad: '' });
+  assert.deepEqual(result.players[1].roles, { good: '', neutral: '鹈鹕', bad: '' });
+  assert.deepEqual(result.players[2].roles, { good: '', neutral: '', bad: '刺客' });
+  assert.deepEqual(result.players[3].roles, { good: '', neutral: '', bad: '' });
+  assert.equal(result.players[3].role, '自定义旧身份');
+  assert.equal(result.players[0].name, '旧昵称');
+  assert.equal(result.players[0].notes, '旧备注');
+  assert.equal(result.players[0].notes2, '');
+  assert.deepEqual(core.normalizeSession(JSON.parse(JSON.stringify(result))), result);
+});
+
+test('saved empty camp selections override legacy roles after normalization and death updates', () => {
+  const result = core.normalizeSession({ players: [
+    { id: 1, role: '警长', roles: { good: '', neutral: '呆呆', bad: '刺客' }, notes2: '已否认警长' },
+    { id: 2, role: '鹈鹕', roles: {} },
+  ] });
+  assert.deepEqual(result.players[0].roles, { good: '', neutral: '呆呆', bad: '刺客' });
+  assert.deepEqual(result.players[1].roles, { good: '', neutral: '', bad: '' });
+  const restored = core.normalizeSession(JSON.parse(JSON.stringify(result)));
+  const updated = core.setDeath(core.setRound(restored, 2), 1, 2, '刀杀');
+  assert.deepEqual(updated.players[0].roles, result.players[0].roles);
+  assert.equal(updated.players[0].notes2, '已否认警长');
+});
+
+test('grouped role fields and the second note are normalized independently', () => {
+  const result = core.normalizeSession({ players: [
+    { id: 1, role: '警长', roles: { good: 42, neutral: '\0呆呆', bad: 'x'.repeat(100) }, notes2: '\0' + 'n'.repeat(300) },
+    { id: 2, role: '刺客', roles: null },
+  ] });
+  assert.deepEqual(result.players[0].roles, { good: '', neutral: '呆呆', bad: 'x'.repeat(32) });
+  assert.equal(result.players[0].notes2, 'n'.repeat(240));
+  assert.deepEqual(result.players[1].roles, { good: '', neutral: '', bad: '刺客' });
 });
 
 test('rounds and corrupted fields are bounded, invalid causes become unknown', () => {
@@ -64,6 +116,7 @@ test('explicit player IDs survive reordered saved data', () => {
 });
 
 test('role groups are deduplicated and contain the original roles', () => {
+  assert.deepEqual(core.ROLE_GROUPS.map(group => [group.key, group.label]), [['good', '好'], ['neutral', '中'], ['bad', '坏']]);
   const all = core.ROLE_GROUPS.flatMap((group) => group.roles);
   assert.equal(new Set(all).size, all.length);
   assert.ok(all.includes('警长'));

@@ -71,36 +71,51 @@
     const card = document.createElement('section');
     card.className = 'player-card';
     card.dataset.playerId = player.id;
-    card.dataset.interactive = '';
     card.setAttribute('aria-label', player.id + ' 号玩家记录');
     // Only fixed application markup is used here; saved text is assigned through value/textContent.
-    card.innerHTML = '<div class="player-top"><span class="player-number"></span><input class="player-name" placeholder="玩家昵称" maxlength="32"><button class="drag-handle" title="拖动到对应人物旁">⠿</button></div>' +
-      '<div class="player-middle"><select class="role-select"></select><input class="player-notes" placeholder="发言 / 身份线索" maxlength="240"></div>' +
-      '<div class="death-actions"></div><div class="death-record"><span class="death-status" aria-live="polite"></span><label>第<input class="death-round" type="number" min="1" max="99">轮</label><button class="revive-button" title="清除死亡标记">存活</button></div>';
-    const name = card.querySelector('.player-name');
-    const role = card.querySelector('.role-select');
+    // Leave the previous nickname row fully transparent and click-through.
+    // Only the controls below it participate in overlay hit-testing.
+    card.innerHTML = '<div class="player-controls" data-interactive><div class="player-roles"></div>' +
+      '<div class="player-notes-row"><input class="player-notes" placeholder="备注 1" maxlength="240"><input class="player-notes-extra" placeholder="备注 2" maxlength="240"></div>' +
+      '<div class="death-actions"></div><div class="death-record"><span class="death-status" aria-live="polite"></span><label>第<input class="death-round" type="number" min="1" max="99">轮</label><button class="revive-button" title="清除死亡标记">存活</button></div>' +
+      '<button class="drag-handle" title="拖动到对应人物旁">⠿</button></div>';
     const notes = card.querySelector('.player-notes');
+    const notesExtra = card.querySelector('.player-notes-extra');
     const round = card.querySelector('.death-round');
-    card.querySelector('.player-number').textContent = String(player.id).padStart(2, '0');
-    name.setAttribute('aria-label', player.id + ' 号玩家昵称');
-    role.setAttribute('aria-label', player.id + ' 号玩家身份');
-    notes.setAttribute('aria-label', player.id + ' 号玩家备注');
+    notes.setAttribute('aria-label', player.id + ' 号玩家备注 1');
+    notesExtra.setAttribute('aria-label', player.id + ' 号玩家备注 2');
     round.setAttribute('aria-label', player.id + ' 号死亡轮次');
-    role.append(option('', '身份待确认'));
     C.ROLE_GROUPS.forEach(group => {
-      const optgroup = document.createElement('optgroup');
-      optgroup.label = group.label;
-      group.roles.forEach(value => optgroup.append(option(value, value)));
-      role.append(optgroup);
+      const field = document.createElement('label');
+      field.className = 'role-field';
+      field.dataset.roleGroup = group.key;
+      const label = document.createElement('span');
+      label.textContent = group.label;
+      const role = document.createElement('select');
+      role.className = 'role-select';
+      role.dataset.roleGroup = group.key;
+      role.setAttribute('aria-label', player.id + ' 号玩家' + group.label + '阵营身份');
+      role.append(option('', '待定'));
+      group.roles.forEach(value => role.append(option(value, value)));
+      const selected = player.roles[group.key];
+      if (selected && !Array.from(role.options).some(item => item.value === selected)) {
+        role.append(option(selected, selected));
+      }
+      role.value = selected;
+      role.title = group.label + ' · ' + (selected || '身份待定');
+      role.addEventListener('change', () => {
+        if (nativeState.locked) return;
+        session.players.find(p => p.id === player.id).roles[group.key] = role.value;
+        role.title = group.label + ' · ' + (role.value || '身份待定');
+        persist();
+      });
+      field.append(label, role);
+      card.querySelector('.player-roles').append(field);
     });
-    if (player.role && !Array.from(role.options).some(item => item.value === player.role)) {
-      role.append(option(player.role, player.role));
-    }
-    name.value = player.name;
-    role.value = player.role;
     notes.value = player.notes;
-    for (const [input, field] of [[name, 'name'], [role, 'role'], [notes, 'notes']]) {
-      input.addEventListener(input === role ? 'change' : 'input', () => {
+    notesExtra.value = player.notes2;
+    for (const [input, field] of [[notes, 'notes'], [notesExtra, 'notes2']]) {
+      input.addEventListener('input', () => {
         if (nativeState.locked) return;
         session.players.find(p => p.id === player.id)[field] = input.value;
         persist();
@@ -351,7 +366,7 @@
     persist();
     toast('当前屏幕的位置已重置。');
   }));
-  $('new-game').addEventListener('click', () => askConfirm('开始新对局？', '清空所有玩家昵称、身份、备注和死亡记录，轮次回到第 1 轮。屏幕位置校准将保留。', '开始新对局', () => {
+  $('new-game').addEventListener('click', () => askConfirm('开始新对局？', '清空所有玩家的好 / 中 / 坏身份、两栏备注和死亡记录，轮次回到第 1 轮。屏幕位置校准将保留。', '开始新对局', () => {
     session = C.createSession();
     draftDeathRounds.clear();
     buildCards();

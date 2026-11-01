@@ -1,7 +1,7 @@
 {
   "name": "ggd-help",
   "productName": "GGD-help",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "鹅鸭杀透明会议蒙版：身份、死亡记录和分辨率校准",
   "main": "index.js",
   "scripts": {

@@ -10,16 +10,17 @@
 
   const PLAYER_COUNT = 16;
   const CARD_WIDTH = 250;
-  const CARD_HEIGHT = 122;
+  // The upper 29px stays transparent so the game's own player name is visible.
+  const CARD_HEIGHT = 151;
   const BASE_WIDTH = 1920;
   const BASE_HEIGHT = 1080;
   const ASPECTS = Object.freeze(['16:9', '16:10', '21:9', '43:18', '64:27', 'stretch']);
   const DEATH_CAUSES = Object.freeze(['刀杀', '投票出局', '刺杀', '炸死', '吞食', '连带', '不明']);
   // The role names come from the original project, with its duplicate 秃鹫 removed.
   const ROLE_GROUPS = Object.freeze([
-    Object.freeze({ label: '鹅', roles: Object.freeze(['好人', '肉汁', '正义使者', '警长', '加拿大', '殡仪员', '网红', '模仿', '侦探', '工程师', '复仇', '观鸟', '保镖', '政治家', '锁匠', '冒险家', '星界行者', '流浪儿童', '追踪者', '跟踪者']) }),
-    Object.freeze({ label: '中立', roles: Object.freeze(['中立', '呆呆', '秃鹫', '鹈鹕', '鸽子', '猎鹰', '决斗呆呆']) }),
-    Object.freeze({ label: '鸭', roles: Object.freeze(['坏比', '丧葬者', '隐形', '食鸭鸟', '变形者', '静语者', '专业杀手', '间谍', '刺客', '雇佣杀手', '告密者', '派对狂', '爆炸王', '身份窃贼', '忍者', '连环杀手', '术士', '超能力']) }),
+    Object.freeze({ key: 'good', label: '好', roles: Object.freeze(['好人', '肉汁', '正义使者', '警长', '加拿大', '殡仪员', '网红', '模仿', '侦探', '工程师', '复仇', '观鸟', '保镖', '政治家', '锁匠', '冒险家', '星界行者', '流浪儿童', '追踪者', '跟踪者']) }),
+    Object.freeze({ key: 'neutral', label: '中', roles: Object.freeze(['中立', '呆呆', '秃鹫', '鹈鹕', '鸽子', '猎鹰', '决斗呆呆']) }),
+    Object.freeze({ key: 'bad', label: '坏', roles: Object.freeze(['坏比', '丧葬者', '隐形', '食鸭鸟', '变形者', '静语者', '专业杀手', '间谍', '刺客', '雇佣杀手', '告密者', '派对狂', '爆炸王', '身份窃贼', '忍者', '连环杀手', '术士', '超能力']) }),
   ]);
   const RESOLUTION_PRESETS = Object.freeze([
     [1280, 720, '16:9'], [1366, 768, '16:9'], [1600, 900, '16:9'],
@@ -54,7 +55,10 @@
     const length = Math.round(number(count, PLAYER_COUNT, 1, PLAYER_COUNT));
     return {
       round: 1,
-      players: Array.from({ length }, (_, i) => ({ id: i + 1, name: '', role: '', notes: '', death: null })),
+      players: Array.from({ length }, (_, i) => ({
+        id: i + 1, name: '', role: '', roles: { good: '', neutral: '', bad: '' },
+        notes: '', notes2: '', death: null,
+      })),
     };
   }
 
@@ -69,11 +73,24 @@
         const indexed = object(players[index]);
         const player = object(match || (indexed.id === undefined ? indexed : null));
         const death = object(player.death);
+        const legacyRole = text(player.role, 32);
+        const hasGroupedRoles = player.roles !== null && typeof player.roles === 'object' && !Array.isArray(player.roles);
+        const groupedRoles = object(player.roles);
+        const roles = {};
+        ROLE_GROUPS.forEach(group => {
+          // An explicitly saved empty group must not resurrect the old single
+          // selection after the user clears it. Migrate only pre-group records.
+          roles[group.key] = hasGroupedRoles
+            ? text(groupedRoles[group.key], 32)
+            : group.roles.includes(legacyRole) ? legacyRole : '';
+        });
         return {
           id: empty.id,
           name: text(player.name, 32),
-          role: text(player.role, 32),
+          role: legacyRole,
+          roles,
           notes: text(player.notes, 240),
+          notes2: text(player.notes2, 240),
           death: player.death && typeof player.death === 'object' && !Array.isArray(player.death)
             ? { round: roundNumber(death.round), cause: DEATH_CAUSES.includes(death.cause) ? death.cause : '不明' }
             : null,

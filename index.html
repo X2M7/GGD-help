@@ -4,14 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'">
-  <title>GGD-help V0.1.0 · 会议蒙版</title>
+  <title>GGD-help V0.1.1 · 会议蒙版</title>
   <link rel="stylesheet" href="style.css">
   <script defer src="core.js"></script>
   <script defer src="renderer.js"></script>
 </head>
 <body>
   <header id="toolbar" data-interactive>
-    <div class="brand" title="GGD-help V0.1.0"><span class="brand-mark">G</span><div><strong>GGD-help</strong><small id="mode-label">记录模式</small></div></div>
+    <div class="brand" title="GGD-help V0.1.1"><span class="brand-mark">G</span><div><strong>GGD-help</strong><small id="mode-label">记录模式</small></div></div>
     <span class="separator"></span>
     <div class="round-control">
       <button id="round-prev" title="上一轮" aria-label="上一轮">−</button>
@@ -25,7 +25,7 @@
     <button id="hide-button" title="隐藏蒙版（Ctrl+Shift+G）">收起</button>
   </header>
   <aside id="settings-panel" class="panel" data-interactive hidden>
-    <div class="panel-heading"><div><span class="eyebrow">GGD-help · V0.1.0</span><h1>对齐你的会议画面</h1></div><button id="settings-close" aria-label="关闭设置">×</button></div>
+    <div class="panel-heading"><div><span class="eyebrow">GGD-help · V0.1.1</span><h1>对齐你的会议画面</h1></div><button id="settings-close" aria-label="关闭设置">×</button></div>
     <label class="field">游戏所在显示器<select id="display-select"></select></label>
     <p id="display-info" class="help"></p>
     <label class="field">布局预设<select id="resolution-preset"><option value="">选择参考分辨率</option></select></label>
@@ -44,7 +44,7 @@
     <label class="slider-field">记录卡大小 <output id="card-scale-value"></output><input id="card-scale" type="range" min="70" max="150" step="1" value="100"></label>
     <label class="slider-field">记录卡底色 <output id="panel-opacity-value"></output><input id="panel-opacity" type="range" min="15" max="95" step="1" value="68"></label>
     <div class="panel-actions"><span id="save-status" role="status">自动保存</span><button id="reset-layout">重置当前位置</button></div>
-    <details><summary>使用提示与快捷键</summary><p>游戏使用无边框窗口或窗口模式。独占全屏可能遮住桌面蒙版；普通窗口模式请用整体调整和逐人校准对齐。</p><p>Ctrl + Shift + G：显示 / 隐藏<br>Ctrl + Shift + L：记录 / 穿透<br>Esc：关闭设置或退出校准</p><p>悬浮开关始终可用：拖动左侧手柄移动；「显示 / 隐藏」切换蒙版；「编辑 / 穿透」切换操作模式。角色身份和死亡信息均由你手动记录。</p><p>已存记录保留到「新对局」。位置按从左到右、从上到下编号；未使用位置可通过显示人数隐藏。</p></details>
+    <details><summary>使用提示与快捷键</summary><p>游戏使用无边框窗口或窗口模式。独占全屏可能遮住桌面蒙版；普通窗口模式请用整体调整和逐人校准对齐。</p><p>Ctrl + Shift + G：显示 / 隐藏<br>Ctrl + Shift + L：记录 / 穿透<br>Esc：关闭设置或退出校准</p><p>悬浮开关始终可用：拖动左侧手柄移动；「显示 / 隐藏」切换蒙版；「编辑 / 穿透」切换操作模式。角色身份和死亡信息均由你手动记录。</p><p>每张卡片顶部留空，直接查看游戏昵称。好 / 中 / 坏三组身份和两个备注框分别保存。默认位置从左到右、从上到下排列；未使用位置可通过显示人数隐藏。已存记录保留到「新对局」。</p></details>
     <p id="shortcut-warning" class="warning" hidden></p>
     <button id="quit-button" class="quiet-button">退出 GGD-help</button>
   </aside>
