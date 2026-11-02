@@ -1,12 +1,12 @@
 # GGD-help
 
-**V0.1.2 · Windows x64 鹅鸭杀透明会议蒙版。** 基于 [snapea/goose-duck-help](https://github.com/snapea/goose-duck-help) 改进，保留原项目作者归属。原项目的截图背景改成透明置顶窗口，可以直接看见后面的游戏会议人物，在旁边记录身份、发言线索和死亡情况。
+**V0.1.3 · Windows x64 鹅鸭杀透明会议蒙版。** 基于 [snapea/goose-duck-help](https://github.com/snapea/goose-duck-help) 改进，保留原项目作者归属。原项目的截图背景改成透明置顶窗口，可以直接看见后面的游戏会议人物，在旁边记录身份、发言线索和死亡情况。
 
 项目仓库：[X2M7/GGD-help](https://github.com/X2M7/GGD-help)。
 
 ## 直接启动
 
-从 [V0.1.2 Releases](https://github.com/X2M7/GGD-help/releases/tag/V0.1.2) 下载 **GGD-help-V0.1.2-win-x64.exe**，直接双击运行。发布包为单文件便携版，不需要安装 Node.js，也不需要另外下载 Electron 文件。首次打开需要解包到临时目录，可能稍慢。旧版保留在[历史 Releases](https://github.com/X2M7/GGD-help/releases) 中。
+从 [V0.1.3 Releases](https://github.com/X2M7/GGD-help/releases/tag/V0.1.3) 下载 **GGD-help-V0.1.3-win-x64.exe**，直接双击运行。发布包为单文件便携版，不需要安装 Node.js，也不需要另外下载 Electron 文件。首次打开需要解包到临时目录，可能稍慢。旧版保留在[历史 Releases](https://github.com/X2M7/GGD-help/releases) 中。
 
 本地源码目录中也可以双击 **启动助手.cmd**。已构建目录版时会启动：
 
@@ -82,7 +82,7 @@ out\GGD-help-win32-x64\GGD-help.exe
 
 V0.1.2 使用系统光标位置判断按钮和输入框区域，不再依赖透明窗口转发鼠标移动消息来恢复点击。鼠标进入可见控件时可直接操作，空白和昵称区域继续穿透；开启「穿透游戏」后整个蒙版交给游戏操作，悬浮开关仍可用。下拉身份选项和拖动校准期间会保持鼠标接收。
 
-本次验证环境为 Windows 11，包含系统原生鼠标输入测试；尚未在 Windows 10 真机和实际游戏中复测。Windows 10 下请先退出旧版，再启动 V0.1.2。
+本次验证环境为 Windows 11，包含系统原生鼠标输入测试；尚未在 Windows 10 真机和实际游戏中复测。Windows 10 下请先退出旧版，再启动新版。
 
 ## 运行源码与构建
 
@@ -108,8 +108,14 @@ npm run test:release
 - `test`：死亡记录、比例布局、黑边、坐标反算、不同 DPI 配置和开关恢复的单元测试。
 - `test:smoke`：启动真实 Electron 窗口，检查透明置顶、角色记录、死亡轮次、复活、拖动、功能开关和重启保存，并通过 Windows 原生鼠标输入验证点击与穿透。使用独立临时配置；截图输出到 `artifacts`，不影响日常记录。
 - `package`：生成 Windows x64 免安装目录，输出到 `out/GGD-help-win32-x64`。
-- `dist`：生成 Release 单文件便携版，输出到 `release/GGD-help-V0.1.2-win-x64.exe`。
+- `dist`：生成 Release 单文件便携版，输出到 `release/GGD-help-V0.1.3-win-x64.exe`。
 - `test:release`：构建后实际启动单文件 exe，使用独立测试配置验证发布程序。
+
+## 包体积优化
+
+V0.1.3 的单文件便携版和目录版都只保留简体中文、繁体中文及英文的 Chromium 界面语言资源。中文记录、角色选项与已有存档继续保留；其他系统语言的内置提示可以回退到英文。
+
+Electron 版本、图形渲染组件、字体与 Unicode 支持数据、鼠标交互逻辑和第三方许可证均保留，仍可单文件离线直接运行。当前便携包已使用高压缩等级；代码本身体积不足 0.1 MB，包大小主要来自完整的 Electron 运行环境。
 
 ## 文件与数据
 
