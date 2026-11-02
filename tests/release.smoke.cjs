@@ -9,6 +9,7 @@ const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { chromium } = require('playwright');
 const { version } = require('../package.json');
+const { createNativeMouse } = require('./native-mouse.cjs');
 
 async function unusedPort() {
   const server = net.createServer();
@@ -120,7 +121,19 @@ async function main() {
     const launcher = context.pages().find(page => /\/launcher\.html$/.test(page.url()));
     assert.ok(launcher, 'portable app loads the separate floating switch');
     await fs.mkdir(path.resolve(__dirname, '../artifacts'), { recursive: true });
+    // Let the transparent native compositor finish repainting after reopening
+    // feature groups, then retain both CDP and desktop captures for review.
+    await new Promise(resolve => setTimeout(resolve, 1000));
     await overlay.screenshot({ path: path.resolve(__dirname, '../artifacts/release-V' + version + '.png'), omitBackground: true });
+    const activeDisplay = state.displays.find(display => display.id === state.displayId);
+    if (process.platform === 'win32' && activeDisplay?.primary && activeDisplay.bounds.x === 0 && activeDisplay.bounds.y === 0) {
+      const mouse = await createNativeMouse();
+      try {
+        await mouse.capture({ x: 0, y: 0, width: Math.floor(activeDisplay.bounds.width * activeDisplay.scaleFactor),
+          height: Math.floor(activeDisplay.bounds.height * activeDisplay.scaleFactor),
+          path: path.resolve(__dirname, '../artifacts/release-native-V' + version + '.png') });
+      } finally { await mouse.close(); }
+    }
     console.log('Portable release passed: self extraction, both windows, transparent name regions, independent identities and notes, all feature toggles, calibration with features disabled, death recording and reload persistence.');
   } finally {
     if (overlay && !overlay.isClosed()) {
