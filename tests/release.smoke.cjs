@@ -56,7 +56,7 @@ async function verifyNativeReleaseMouse(overlay, launcher) {
 }
 
 async function main() {
-  const executable = path.resolve(__dirname, '../release/GGD-help-V' + version + '-win-x64.exe');
+  const executable = path.resolve(__dirname, '../release/electron/GGD-help-Electron-V' + version + '-win-x64.exe');
   await fs.access(executable);
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'ggd-help-release-qa-'));
   // Simulate downloading just the exe into an otherwise empty directory. This
