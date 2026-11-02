@@ -24,19 +24,16 @@
       if (key.length < 200) profiles[key] = C.normalizeLayout(value);
     });
   }
-  const numeric = (value, fallback, min, max) =>
-    typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
-  const preferences = {
-    playerCount: Math.round(numeric(stored.preferences?.playerCount, 16, 1, 16)),
-    opacity: numeric(stored.preferences?.opacity, 68, 15, 95),
-  };
+  const preferences = C.normalizePreferences(stored.preferences);
   let nativeState = { visible: true, locked: false, displays: [] };
   let layout = C.createLayout();
   let activeProfile = '';
   let calibrating = false;
   let dragging = null;
-  let interactive = null;
-  let lastPointer = null;
+  let interactionCapture = null;
+  let regionFrame = 0;
+  let lastRegions = '';
+  const pressedPointers = new Set();
   let toastTimer;
   let confirmAction = null;
   const cards = new Map();
@@ -77,7 +74,7 @@
     // Only the controls below it participate in overlay hit-testing.
     card.innerHTML = '<div class="player-controls" data-interactive><div class="player-roles"></div>' +
       '<div class="player-notes-row"><input class="player-notes" placeholder="备注 1" maxlength="240"><input class="player-notes-extra" placeholder="备注 2" maxlength="240"></div>' +
-      '<div class="death-actions"></div><div class="death-record"><span class="death-status" aria-live="polite"></span><label>第<input class="death-round" type="number" min="1" max="99">轮</label><button class="revive-button" title="清除死亡标记">存活</button></div>' +
+      '<div class="player-death"><div class="death-actions"></div><div class="death-record"><span class="death-status" aria-live="polite"></span><label>第<input class="death-round" type="number" min="1" max="99">轮</label><button class="revive-button" title="清除死亡标记">存活</button></div></div>' +
       '<button class="drag-handle" title="拖动到对应人物旁">⠿</button></div>';
     const notes = card.querySelector('.player-notes');
     const notesExtra = card.querySelector('.player-notes-extra');
@@ -162,7 +159,7 @@
       dragging = { id: player.id, dx: event.clientX - bounds.left, dy: event.clientY - bounds.top, handle, pointerId: event.pointerId };
       handle.setPointerCapture(event.pointerId);
       card.classList.add('dragging');
-      updateInteractive(true);
+      refreshInteractionCapture();
     });
     handle.addEventListener('pointermove', event => {
       if (!dragging || dragging.id !== player.id) return;
@@ -200,13 +197,28 @@
       const card = cards.get(player.id);
       if (!card) continue;
       card.hidden = player.id > preferences.playerCount;
-      card.classList.toggle('dead', Boolean(player.death));
+      card.classList.toggle('dead', preferences.features.death && Boolean(player.death));
       card.querySelector('.death-status').textContent = player.death ? '第 ' + player.death.round + ' 轮 · ' + player.death.cause : '存活 · 点击方式标记死亡';
       card.querySelector('.death-round').value = player.death?.round ?? draftDeathRounds.get(player.id) ?? session.round;
       card.querySelector('.revive-button').disabled = !player.death;
       card.querySelector('.revive-button').textContent = player.death ? '复活' : '存活';
       card.querySelectorAll('[data-cause]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.cause === player.death?.cause)));
     }
+    renderFeatures();
+  }
+  function renderFeatures() {
+    const features = preferences.features;
+    const empty = !features.roles && !features.notes && !features.death;
+    for (const card of cards.values()) {
+      card.querySelector('.player-roles').hidden = !features.roles;
+      card.querySelector('.player-notes-row').hidden = !features.notes;
+      card.querySelector('.player-death').hidden = !features.death;
+      const controls = card.querySelector('.player-controls');
+      controls.hidden = empty && !calibrating;
+      controls.classList.toggle('has-death', features.death);
+      controls.classList.toggle('no-features', empty);
+    }
+    for (const key of ['roles', 'notes', 'death']) $('feature-' + key).checked = features[key];
   }
   function positionCards() {
     for (const point of C.computePositions(layout, innerWidth, innerHeight)) {
@@ -237,6 +249,7 @@
     $('calibration-toggle').checked = calibrating;
     document.body.classList.toggle('calibrating', calibrating);
     $('calibration-hint').hidden = !calibrating;
+    renderFeatures();
   }
   function showSettings(value) {
     $('settings-panel').hidden = !value;
@@ -245,7 +258,8 @@
   }
   function applyNativeState(state) {
     nativeState = state;
-    interactive = null; // Native mode transitions reset mouse-event routing.
+    interactionCapture = null;
+    lastRegions = ''; // Native mode transitions can reset mouse-event routing.
     const display = state.displays.find(item => item.id === state.displayId);
     if (display) {
       const key = C.profileKey(display);
@@ -270,6 +284,7 @@
     $('locked-hint').hidden = !state.locked;
     ['toolbar', 'players', 'settings-panel', 'confirm-panel'].forEach(id => { $(id).inert = state.locked; });
     if (state.locked || !state.visible) {
+      pressedPointers.clear();
       setCalibration(false);
       showSettings(false);
       cancelConfirm();
@@ -279,15 +294,41 @@
     $('shortcut-warning').textContent = warnings.join('；');
     refreshInteractive();
   }
-  function updateInteractive(value) {
-    const next = Boolean(value && !nativeState.locked && nativeState.visible);
-    if (interactive === next) return;
-    interactive = next;
-    api.setInteractive(next);
+  function refreshInteractionCapture() {
+    // Native select popups extend beyond their control's rectangle. Keep the
+    // window receptive until the menu closes, including keyboard-opened menus.
+    const menuOpen = Boolean(document.querySelector('select:open'));
+    const next = Boolean(nativeState.visible && !nativeState.locked &&
+      (dragging || pressedPointers.size || menuOpen));
+    if (interactionCapture === next) return;
+    interactionCapture = next;
+    api.setInteractionCapture(next);
+  }
+  function publishInteractiveRegions() {
+    regionFrame = 0;
+    const regions = [];
+    if (nativeState.visible && !nativeState.locked) {
+      for (const element of document.querySelectorAll('[data-interactive]')) {
+        if (element.closest('[hidden], [inert]') || !element.getClientRects().length) continue;
+        const style = getComputedStyle(element);
+        if (style.visibility !== 'visible' || style.pointerEvents === 'none') continue;
+        const rect = element.getBoundingClientRect();
+        const x = Math.max(0, rect.left), y = Math.max(0, rect.top);
+        const width = Math.min(innerWidth, rect.right) - x;
+        const height = Math.min(innerHeight, rect.bottom) - y;
+        if (width > 0 && height > 0) regions.push({ x, y, width, height });
+      }
+    }
+    const serialized = JSON.stringify(regions);
+    if (serialized !== lastRegions) {
+      lastRegions = serialized;
+      api.setInteractiveRegions(regions);
+    }
+    refreshInteractionCapture();
   }
   function refreshInteractive() {
-    const target = lastPointer && document.elementFromPoint(lastPointer.x, lastPointer.y);
-    updateInteractive(dragging || target?.closest('[data-interactive]'));
+    if (!regionFrame) regionFrame = requestAnimationFrame(publishInteractiveRegions);
+    refreshInteractionCapture();
   }
   function changeRound(value) {
     session = C.setRound(session, value);
@@ -344,6 +385,14 @@
     persist();
   });
   $('calibration-toggle').addEventListener('change', event => setCalibration(event.target.checked));
+  for (const key of ['roles', 'notes', 'death']) {
+    $('feature-' + key).addEventListener('change', event => {
+      preferences.features[key] = event.target.checked;
+      renderStatus();
+      persist();
+      refreshInteractive();
+    });
+  }
   for (const [id, key] of [['offset-x', 'offsetX'], ['offset-y', 'offsetY'], ['layout-scale', 'scale'], ['card-scale', 'cardScale']]) {
     $(id).addEventListener('input', event => {
       layout[key] = Number(event.target.value) / 100;
@@ -379,11 +428,42 @@
     cancelConfirm();
     action?.();
   });
-  document.addEventListener('mousemove', event => {
-    lastPointer = { x: event.clientX, y: event.clientY };
-    refreshInteractive();
+  // Publish geometry rather than depending on mousemove forwarding through an
+  // ignored transparent HWND (which can fail on Windows with elevated games).
+  const regionObserver = new MutationObserver(refreshInteractive);
+  regionObserver.observe(document.body, {
+    subtree: true, childList: true, attributes: true,
+    attributeFilter: ['hidden', 'inert', 'class', 'style'],
   });
-  document.addEventListener('mouseleave', () => { lastPointer = null; if (!dragging) updateInteractive(false); });
+  const regionResizeObserver = new ResizeObserver(refreshInteractive);
+  for (const element of [document.body, $('toolbar'), $('settings-panel'), $('confirm-panel')]) {
+    regionResizeObserver.observe(element);
+  }
+  document.addEventListener('scroll', refreshInteractive, true);
+  document.addEventListener('pointerdown', event => {
+    if (event.target.closest('[data-interactive]') && !event.target.closest('select, [inert]')) {
+      pressedPointers.add(event.pointerId);
+      refreshInteractionCapture();
+    }
+    setTimeout(refreshInteractionCapture, 0); // After a select's default open action.
+  }, true);
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+    document.addEventListener(type, event => {
+      pressedPointers.delete(event.pointerId);
+      refreshInteractionCapture();
+    }, true);
+  }
+  for (const type of ['change', 'focusin', 'focusout', 'keyup']) {
+    document.addEventListener(type, () => setTimeout(refreshInteractionCapture, 0), true);
+  }
+  window.addEventListener('blur', () => {
+    pressedPointers.clear();
+    finishDrag();
+    interactionCapture = false;
+    api.setInteractionCapture(false);
+  });
+  // Native popup close does not always dispatch a DOM change (e.g. Escape).
+  const captureTimer = setInterval(refreshInteractionCapture, 50);
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
       cancelConfirm();
@@ -391,8 +471,16 @@
       setCalibration(false);
     }
   });
-  window.addEventListener('resize', positionCards);
-  window.addEventListener('beforeunload', persist);
+  window.addEventListener('resize', () => { positionCards(); refreshInteractive(); });
+  window.addEventListener('beforeunload', () => {
+    persist();
+    clearInterval(captureTimer);
+    cancelAnimationFrame(regionFrame);
+    regionObserver.disconnect();
+    regionResizeObserver.disconnect();
+    api.setInteractionCapture(false);
+    api.setInteractiveRegions([]);
+  });
   buildCards();
   renderSettings();
   api.onState(applyNativeState);

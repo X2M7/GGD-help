@@ -84,8 +84,30 @@ async function main() {
         && player.notes === '发布包第一条记录' && player.notes2 === '发布包第二条独立记录'
         && player.death.round === 2 && player.death.cause === '炸死';
     });
+    const recordedSession = await overlay.evaluate(() => JSON.parse(localStorage.getItem('goose-duck-overlay:v2')).session);
+    await overlay.locator('#settings-toggle').click();
+    for (const [key, selectors] of [
+      ['roles', ['.player-roles']], ['notes', ['.player-notes-row']], ['death', ['.death-actions', '.death-record']],
+    ]) {
+      assert.equal(await overlay.locator('#feature-' + key).isChecked(), true, `${key} defaults to visible`);
+      await overlay.locator('#feature-' + key).uncheck();
+      for (const selector of selectors) assert.equal(await card.locator(selector).isVisible(), false, `${selector} hides in the release`);
+    }
+    assert.equal(await card.locator('.player-controls').isVisible(), false, 'disabled features do not leave an empty panel');
+    await overlay.locator('#calibration-toggle').check();
+    assert.equal(await card.locator('.drag-handle').isVisible(), true, 'calibration works when all features are disabled');
+    await overlay.locator('#calibration-toggle').uncheck();
     await overlay.reload();
     await card.waitFor({ state: 'visible' });
+    assert.equal(await card.locator('.player-controls').isVisible(), false, 'feature choices survive reload in the portable exe');
+    await overlay.locator('#settings-toggle').click();
+    for (const key of ['roles', 'notes', 'death']) {
+      assert.equal(await overlay.locator('#feature-' + key).isChecked(), false);
+      await overlay.locator('#feature-' + key).check();
+    }
+    await overlay.locator('#settings-close').click();
+    assert.deepEqual(await overlay.evaluate(() => JSON.parse(localStorage.getItem('goose-duck-overlay:v2')).session), recordedSession,
+      're-enabling features preserves every recorded value');
     assert.equal(await card.locator('.role-select[data-role-group="good"]').inputValue(), '警长');
     assert.equal(await card.locator('.role-select[data-role-group="neutral"]').inputValue(), '呆呆');
     assert.equal(await card.locator('.role-select[data-role-group="bad"]').inputValue(), '刺客');
@@ -99,7 +121,7 @@ async function main() {
     assert.ok(launcher, 'portable app loads the separate floating switch');
     await fs.mkdir(path.resolve(__dirname, '../artifacts'), { recursive: true });
     await overlay.screenshot({ path: path.resolve(__dirname, '../artifacts/release-V' + version + '.png'), omitBackground: true });
-    console.log('Portable release passed: self extraction, both windows, transparent name regions, three independent identities, two independent note fields, death recording and reload persistence.');
+    console.log('Portable release passed: self extraction, both windows, transparent name regions, independent identities and notes, all feature toggles, calibration with features disabled, death recording and reload persistence.');
   } finally {
     if (overlay && !overlay.isClosed()) {
       await overlay.evaluate(() => window.overlayAPI.quit()).catch(() => {});

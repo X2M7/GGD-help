@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('overlayAPI', {
   setLocked: (value) => ipcRenderer.invoke('overlay:set-locked', value),
   selectDisplay: (id) => ipcRenderer.invoke('overlay:select-display', id),
   setInteractive: (value) => ipcRenderer.send('overlay:interactive', value),
+  setInteractiveRegions: (regions) => ipcRenderer.send('overlay:interactive-regions', regions),
+  setInteractionCapture: (value) => ipcRenderer.send('overlay:interaction-capture', value),
   quit: () => ipcRenderer.invoke('overlay:quit'),
   showMenu: () => ipcRenderer.invoke('launcher:menu'),
   onState: (callback) => {

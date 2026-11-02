@@ -51,6 +51,22 @@
     return typeof value === 'string' ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').slice(0, limit) : '';
   }
 
+  function normalizePreferences(raw) {
+    const source = object(raw);
+    const features = object(source.features);
+    return {
+      playerCount: Math.round(number(source.playerCount, PLAYER_COUNT, 1, PLAYER_COUNT)),
+      opacity: number(source.opacity, 68, 15, 95),
+      // Upgrades retain every visible feature. Only an explicit boolean false
+      // disables a group; missing or damaged settings must not hide records.
+      features: {
+        roles: features.roles !== false,
+        notes: features.notes !== false,
+        death: features.death !== false,
+      },
+    };
+  }
+
   function createSession(count = PLAYER_COUNT) {
     const length = Math.round(number(count, PLAYER_COUNT, 1, PLAYER_COUNT));
     return {
@@ -230,7 +246,7 @@
 
   return Object.freeze({
     PLAYER_COUNT, CARD_WIDTH, CARD_HEIGHT, ASPECTS, DEATH_CAUSES, ROLE_GROUPS, RESOLUTION_PRESETS,
-    createSession, normalizeSession, setRound, setDeath, revivePlayer,
+    normalizePreferences, createSession, normalizeSession, setRound, setDeath, revivePlayer,
     createLayout, normalizeLayout, computeViewport, computePositions, movePlayer, profileKey,
   });
 });

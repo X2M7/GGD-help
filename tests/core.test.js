@@ -9,6 +9,41 @@ function near(actual, expected, epsilon = 1e-8) {
   assert.ok(Math.abs(actual - expected) < epsilon, `${actual} should be close to ${expected}`);
 }
 
+test('feature settings default on for new users and retain older count and opacity', () => {
+  const defaults = { playerCount: 16, opacity: 68, features: { roles: true, notes: true, death: true } };
+  assert.deepEqual(core.normalizePreferences(), defaults);
+  assert.deepEqual(core.normalizePreferences(null), defaults);
+  assert.deepEqual(core.normalizePreferences([]), defaults);
+  assert.deepEqual(core.normalizePreferences({ playerCount: 9, opacity: 45 }), {
+    playerCount: 9, opacity: 45, features: { roles: true, notes: true, death: true },
+  });
+});
+
+test('feature settings retain every combination of explicit unchecked groups after saving', () => {
+  for (let mask = 0; mask < 8; mask += 1) {
+    const preferences = {
+      playerCount: 12, opacity: 54,
+      features: { roles: Boolean(mask & 1), notes: Boolean(mask & 2), death: Boolean(mask & 4) },
+    };
+    const saved = JSON.parse(JSON.stringify(preferences));
+    assert.deepEqual(core.normalizePreferences(saved), preferences);
+  }
+});
+
+test('damaged feature settings do not hide existing player data or share default state', () => {
+  const preferences = core.normalizePreferences({
+    playerCount: Infinity, opacity: -10, features: { roles: 'false', notes: null, death: 0 },
+  });
+  assert.deepEqual(preferences, {
+    playerCount: 16, opacity: 15, features: { roles: true, notes: true, death: true },
+  });
+  preferences.features.roles = false;
+  assert.equal(core.normalizePreferences().features.roles, true);
+  assert.deepEqual(core.normalizePreferences({ features: [false, false, false] }).features, {
+    roles: true, notes: true, death: true,
+  });
+});
+
 test('16 independent player records and normalized imported records', () => {
   const session = core.createSession();
   assert.equal(session.players.length, 16);

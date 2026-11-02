@@ -6,6 +6,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { _electron: electron } = require('playwright');
+const { createNativeMouse } = require('./native-mouse.cjs');
 
 const project = path.resolve(__dirname, '..');
 const artifacts = path.join(project, 'artifacts');
@@ -74,6 +75,138 @@ async function windowInfo(application) {
 
 async function waitForState(page, key, value) {
   await page.waitForFunction(async ({ key, value }) => (await window.overlayAPI.getState())[key] === value, { key, value });
+}
+
+async function verifyNativeMouse(application, overlay, launcher) {
+  if (process.platform !== 'win32') return;
+  const mouse = await createNativeMouse();
+  let backdrop;
+  const physicalPoint = async (page, point) => application.evaluate(({ BrowserWindow, screen }, { url, point }) => {
+    const bounds = BrowserWindow.getAllWindows().find(win => win.webContents.getURL() === url).getBounds();
+    return screen.dipToScreenPoint({ x: Math.round(bounds.x + point.x), y: Math.round(bounds.y + point.y) });
+  }, { url: page.url(), point });
+  const click = async (page, selector) => {
+    const rect = await page.locator(selector).boundingBox();
+    assert.ok(rect, `native click target is visible: ${selector}`);
+    await mouse.click(await physicalPoint(page, { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }));
+  };
+  try {
+    await application.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows().find(item => /\/index\.html/.test(item.webContents.getURL()));
+      win.__qaOriginalIgnoreMouseEvents = win.setIgnoreMouseEvents;
+      win.setIgnoreMouseEvents = function (ignore) {
+        return this.__qaOriginalIgnoreMouseEvents(ignore, { forward: false });
+      };
+      win.setIgnoreMouseEvents(true);
+    });
+    // Native SendInput enters via the HWND, so a window that ignores all mouse
+    // events cannot pass this test the way it can pass Playwright/CDP clicks.
+    // Explicitly suppress forwarded mouse-move events to reproduce the missing
+    // event path reported on Windows 10, even when this test runs on Windows 11.
+    await mouse.move(await physicalPoint(overlay, { x: 8, y: 300 }));
+    await click(overlay, '#round-next');
+    await overlay.waitForFunction(() => document.getElementById('round-input').value === '2');
+    await click(overlay, '#round-prev');
+    await overlay.waitForFunction(() => document.getElementById('round-input').value === '1');
+    const note = '.player-card[data-player-id="1"] .player-notes';
+    await click(overlay, note);
+    await overlay.waitForFunction(selector => document.activeElement === document.querySelector(selector), note);
+
+    const role = '.player-card[data-player-id="1"] .role-select[data-role-group="good"]';
+    const selectBounds = await overlay.locator(role).boundingBox();
+    await click(overlay, role);
+    await overlay.waitForFunction(selector => document.querySelector(selector).matches(':open'), role);
+    const popupOrigin = await physicalPoint(overlay, { x: selectBounds.x, y: selectBounds.y });
+    await mouse.capture({ ...popupOrigin, width: 300, height: 600, path: path.join(artifacts, 'native-select.png') });
+    // Chromium's Windows popup starts below the select with its placeholder row.
+    // Click the following identity row, using the captured native popup as a QA
+    // artifact. This click must reach the popup rather than falling through it.
+    await mouse.click(await physicalPoint(overlay, {
+      x: selectBounds.x + selectBounds.width / 2,
+      y: selectBounds.y + selectBounds.height * 2.7,
+    }));
+    await overlay.waitForFunction(selector => Boolean(document.querySelector(selector).value), role);
+    assert.ok(await overlay.locator(role).inputValue(), 'a role is selected with real Windows mouse clicks');
+
+    await click(overlay, '.player-card[data-player-id="1"] [data-cause="刀杀"]');
+    await overlay.waitForFunction(() => JSON.parse(localStorage.getItem('goose-duck-overlay:v2')).session.players[0].death?.cause === '刀杀');
+    await click(overlay, '.player-card[data-player-id="1"] .revive-button');
+    await overlay.waitForFunction(() => JSON.parse(localStorage.getItem('goose-duck-overlay:v2')).session.players[0].death === null);
+
+    const namePoint = await overlay.locator('.player-card[data-player-id="1"]').evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      const controls = element.querySelector('.player-controls').getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: (rect.top + controls.top) / 2 };
+    });
+    backdrop = await application.evaluateHandle(async ({ BrowserWindow }, point) => {
+      const overlayWindow = BrowserWindow.getAllWindows().find(win => /\/index\.html/.test(win.webContents.getURL()));
+      const bounds = overlayWindow.getBounds();
+      const win = new BrowserWindow({ x: Math.round(bounds.x + point.x - 45), y: Math.round(bounds.y + point.y - 9),
+        width: 90, height: 18, frame: false, show: false, skipTaskbar: true,
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
+      await win.loadURL('data:text/html,<body style="margin:0;background:%2337424d"><script>window.nativeClicks=0;document.addEventListener("click",()=>window.nativeClicks++)</script>');
+      win.showInactive();
+      return win;
+    }, namePoint);
+    await mouse.click(await physicalPoint(overlay, namePoint));
+    const clicks = await backdrop.evaluate(win => win.webContents.executeJavaScript('window.nativeClicks'));
+    assert.equal(clicks, 1, 'the transparent nickname area sends native clicks to the window behind it');
+    await backdrop.evaluate(win => win.destroy());
+    backdrop = null;
+    await click(overlay, '#lock-button');
+    await waitForState(overlay, 'locked', true);
+    await click(launcher, '#lock');
+    await waitForState(overlay, 'locked', false);
+    await click(overlay, '#hide-button');
+    await waitForState(launcher, 'visible', false);
+    await click(launcher, '#toggle');
+    await waitForState(overlay, 'visible', true);
+    console.log(`Native Windows mouse passed on ${os.release()} with mouse forwarding disabled: toolbar, note focus, select popup, death controls, transparent nickname passthrough and floating switch.`);
+  } finally {
+    if (backdrop) await backdrop.evaluate(win => win.destroy()).catch(() => {});
+    await application.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows().find(item => /\/index\.html/.test(item.webContents.getURL()));
+      if (win?.__qaOriginalIgnoreMouseEvents) {
+        win.setIgnoreMouseEvents = win.__qaOriginalIgnoreMouseEvents;
+        delete win.__qaOriginalIgnoreMouseEvents;
+      }
+    }).catch(() => {});
+    await mouse.close();
+  }
+}
+
+async function verifyFeatureToggles(overlay, card) {
+  const groups = [
+    ['roles', '.player-roles'],
+    ['notes', '.player-notes-row'],
+    ['death', '.death-actions, .death-record'],
+  ];
+  const storedBefore = await overlay.evaluate(() => JSON.parse(localStorage.getItem('goose-duck-overlay:v2')).session);
+  for (const [key, selector] of groups) {
+    assert.equal(await overlay.locator('#feature-' + key).isChecked(), true, 'new settings default to enabled');
+    await overlay.locator('#feature-' + key).uncheck();
+    assert.equal(await overlay.locator('.player-card ' + selector.split(', ').join(', .player-card ')).filter({ visible: true }).count(), 0, `${key} is hidden for all players`);
+    for (const [other, otherSelector] of groups) {
+      if (other !== key) assert.equal(await card.locator(otherSelector).first().isVisible(), true, `disabling ${key} preserves ${other}`);
+    }
+    await overlay.locator('#feature-' + key).check();
+    assert.equal(await card.locator(selector).first().isVisible(), true);
+  }
+  for (const [key] of groups) await overlay.locator('#feature-' + key).uncheck();
+  assert.equal(await card.locator('.player-controls').isVisible(), false, 'all features off leaves no empty background');
+  const hit = await card.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return Boolean(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)?.closest('[data-interactive]'));
+  });
+  assert.equal(hit, false, 'all features off leaves player area click-through');
+  await overlay.locator('#calibration-toggle').check();
+  assert.equal(await card.locator('.drag-handle').isVisible(), true, 'calibration remains available with every feature off');
+  await overlay.locator('#calibration-toggle').uncheck();
+  const storedAfter = await overlay.evaluate(() => JSON.parse(localStorage.getItem('goose-duck-overlay:v2')));
+  assert.deepEqual(storedAfter.session, storedBefore, 'feature toggles never erase player records');
+  assert.deepEqual(storedAfter.preferences.features, { roles: false, notes: false, death: false });
+  // Restore now; a second all-off check before restart proves disk persistence.
+  for (const [key] of groups) await overlay.locator('#feature-' + key).check();
 }
 
 async function main() {
@@ -156,6 +289,7 @@ async function main() {
     assert.ok(capture.transparent > 100 && capture.painted > 100, 'native compositor preserves transparent empty regions');
     assert.deepEqual(capture.nameBandAlpha, Array(16).fill(0), 'every former nickname row is fully transparent in the native compositor');
     assert.equal(await overlay.locator('.player-card').count(), 16);
+    await verifyNativeMouse(application, overlay, launcher);
     await overlay.locator('#round-input').fill('3');
     await overlay.locator('#round-input').press('Tab');
     await card.locator('.role-select[data-role-group="good"]').selectOption({ label: '警长' });
@@ -191,6 +325,7 @@ async function main() {
 
     await overlay.locator('#settings-toggle').click();
     await overlay.locator('#settings-panel').waitFor({ state: 'visible' });
+    await verifyFeatureToggles(overlay, card);
     await overlay.locator('#display-select').selectOption(String(initial.displayId));
     await waitForState(overlay, 'displayId', initial.displayId);
     await overlay.locator('#aspect-select').selectOption('16:10');
@@ -241,6 +376,9 @@ async function main() {
 
     await overlay.screenshot({ path: path.join(artifacts, 'overlay.png'), omitBackground: true });
     await launcher.screenshot({ path: path.join(artifacts, 'launcher.png'), omitBackground: true });
+    await overlay.locator('#settings-toggle').click();
+    for (const key of ['roles', 'notes', 'death']) await overlay.locator('#feature-' + key).uncheck();
+    const savedPreferences = await overlay.evaluate(() => JSON.parse(localStorage.getItem('goose-duck-overlay:v2')).preferences);
     await application.close();
     running = null;
     running = await openApp(profile, errors);
@@ -252,7 +390,9 @@ async function main() {
     const restored = await running.overlay.evaluate(() => JSON.parse(localStorage.getItem('goose-duck-overlay:v2')));
     assert.deepEqual(restored.session, saved.session, 'meeting, identity, notes and death records survive restart');
     assert.deepEqual(restored.profiles, saved.profiles, 'calibrated positions survive restart');
+    assert.deepEqual(restored.preferences, savedPreferences, 'feature choices survive a full application restart');
     const restoredCard = running.overlay.locator('.player-card[data-player-id="1"]');
+    assert.equal(await restoredCard.locator('.player-controls').isVisible(), false, 'disabled features stay invisible after restart');
     assert.equal(await restoredCard.locator('.role-select[data-role-group="good"]').inputValue(), '警长');
     assert.equal(await restoredCard.locator('.role-select[data-role-group="neutral"]').inputValue(), '呆呆');
     assert.equal(await restoredCard.locator('.role-select[data-role-group="bad"]').inputValue(), '刺客');
@@ -261,6 +401,17 @@ async function main() {
     assert.equal(await restoredCard.locator('.death-round').inputValue(), '4');
     const restoredBounds = await restoredCard.boundingBox();
     assert.ok(Math.abs(restoredBounds.x - after.x) < 3 && Math.abs(restoredBounds.y - after.y) < 3, 'restored coordinates are applied');
+    await running.overlay.locator('#settings-toggle').click();
+    for (const key of ['roles', 'notes', 'death']) {
+      assert.equal(await running.overlay.locator('#feature-' + key).isChecked(), false);
+      await running.overlay.locator('#feature-' + key).check();
+    }
+    await running.overlay.locator('#settings-close').click();
+    assert.equal(await restoredCard.locator('.player-roles').isVisible(), true);
+    assert.equal(await restoredCard.locator('.player-notes-row').isVisible(), true);
+    assert.equal(await restoredCard.locator('.death-record').isVisible(), true);
+    assert.deepEqual(await running.overlay.evaluate(() => JSON.parse(localStorage.getItem('goose-duck-overlay:v2')).session), saved.session,
+      'enabling features after restart restores the original records');
     await running.overlay.locator('#new-game').click();
     await running.overlay.locator('#confirm-new-game').click();
     await running.overlay.waitForFunction(() => {
@@ -272,7 +423,7 @@ async function main() {
     const reset = await running.overlay.evaluate(() => JSON.parse(localStorage.getItem('goose-duck-overlay:v2')));
     assert.deepEqual(reset.profiles, saved.profiles, 'starting a new match preserves screen calibration');
     assert.deepEqual(errors, [], 'no renderer errors');
-    console.log('Electron smoke test passed: native transparent name rows, independent good/neutral/bad identities, two note fields, display bounds, death rounds, revival, calibration drag, lock, visibility, restart persistence and match reset.');
+    console.log('Electron smoke test passed: native Windows mouse routing, transparent name rows, independent identities and notes, feature toggles and restart persistence, death records, display bounds, calibration, lock, visibility and match reset.');
   } catch (error) {
     if (running) {
       for (const [name, page] of [['overlay', running.overlay], ['launcher', running.launcher]]) {

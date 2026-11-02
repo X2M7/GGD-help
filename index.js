@@ -2,7 +2,7 @@ const { app, BrowserWindow, globalShortcut, ipcMain, Menu, Tray, nativeImage, sc
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { clampLauncher, sanitizeSettings } = require('./shell-state');
+const { clampLauncher, sanitizeSettings, sanitizeInteractiveRegions, shouldIgnoreMouse } = require('./shell-state');
 const { migrateLegacyData } = require('./legacy-data');
 
 app.setName('GGD-help');
@@ -21,6 +21,12 @@ let quitting = false;
 let settings = {};
 let saveTimer;
 let interactive = false;
+let interactiveRegions = [];
+let regionsReady = false;
+let interactionCaptured = false;
+let mousePollTimer;
+let appliedIgnoreMouse;
+let appliedFocusable;
 let visible = true;
 let locked = false;
 let displayId;
@@ -87,11 +93,41 @@ function broadcast() {
 
 function updateMouseMode() {
   if (!overlay || overlay.isDestroyed()) return;
-  overlay.setIgnoreMouseEvents(locked || !interactive, { forward: true });
+  const ignore = !visible || locked || !interactive;
+  if (appliedIgnoreMouse !== ignore) {
+    overlay.setIgnoreMouseEvents(ignore, { forward: true });
+    appliedIgnoreMouse = ignore;
+  }
   // Mouse passthrough alone does not release keyboard focus. Explicitly end
   // editing when the user locks/hides the overlay so game keys cannot be eaten.
   if ((locked || !visible) && overlay.isFocused()) overlay.blur();
-  overlay.setFocusable(!locked);
+  if (appliedFocusable !== !locked) {
+    overlay.setFocusable(!locked);
+    appliedFocusable = !locked;
+  }
+}
+
+function refreshNativeMouse() {
+  if (quitting || !overlay || overlay.isDestroyed()) return;
+  // On Windows forwarded mouse moves can stop while an elevated application is
+  // focused (UIPI). Reading the native cursor independently avoids a deadlock in
+  // which a click-through overlay never receives the move needed to unlock it.
+  // https://www.electronjs.org/docs/latest/api/browser-window#winsetignoremouseeventsignore-options
+  interactive = !shouldIgnoreMouse({
+    visible, locked, captured: interactionCaptured,
+    point: screen.getCursorScreenPoint(), bounds: overlay.getContentBounds(),
+    regions: interactiveRegions,
+  });
+  updateMouseMode();
+}
+
+function resetMouseCapture(clearRegions = false) {
+  interactionCaptured = false;
+  if (clearRegions) {
+    interactiveRegions = [];
+    regionsReady = false;
+  }
+  refreshNativeMouse();
 }
 
 function keepLauncherAbove() {
@@ -103,6 +139,7 @@ function keepLauncherAbove() {
 
 function setVisible(value) {
   visible = value;
+  interactionCaptured = false;
   interactive = false;
   updateMouseMode();
   if (visible) {
@@ -111,6 +148,7 @@ function setVisible(value) {
   }
   else overlay.hide();
   keepLauncherAbove();
+  refreshNativeMouse();
   broadcast();
   return getState();
 }
@@ -122,6 +160,7 @@ function setLocked(value) {
   const releaseFocus = value && overlay.isFocused();
   if (releaseFocus) overlay.hide();
   locked = value;
+  interactionCaptured = false;
   interactive = false;
   updateMouseMode();
   if (releaseFocus && visible) {
@@ -129,6 +168,7 @@ function setLocked(value) {
     overlay.setBounds(activeDisplay().bounds);
   }
   keepLauncherAbove();
+  refreshNativeMouse();
   broadcast();
   return getState();
 }
@@ -152,6 +192,7 @@ function selectDisplay(id) {
   displayId = display.id;
   settings.displayId = displayId;
   overlay.setBounds(display.bounds);
+  interactionCaptured = false;
   interactive = false;
   updateMouseMode();
   restoreLauncher(true);
@@ -214,9 +255,29 @@ function registerIPC() {
   ipcMain.on('overlay:interactive', (event, value) => {
     try {
       authorize(event, 'overlay');
-      if (typeof value !== 'boolean' || interactive === value) return;
+      if (typeof value !== 'boolean') return;
+      // Once regions are available the native cursor is authoritative; stale
+      // forwarded renderer moves must not override its hit test.
+      if (regionsReady) { refreshNativeMouse(); return; }
+      if (interactive === value) return;
       interactive = value;
       updateMouseMode();
+    } catch { /* Ignore unauthorized, malformed, or late renderer messages. */ }
+  });
+  ipcMain.on('overlay:interactive-regions', (event, value) => {
+    try {
+      authorize(event, 'overlay');
+      interactiveRegions = sanitizeInteractiveRegions(value);
+      regionsReady = true;
+      refreshNativeMouse();
+    } catch { /* Ignore unauthorized or late renderer messages. */ }
+  });
+  ipcMain.on('overlay:interaction-capture', (event, value) => {
+    try {
+      authorize(event, 'overlay');
+      if (typeof value !== 'boolean') return;
+      interactionCaptured = value && visible && !locked;
+      refreshNativeMouse();
     } catch { /* Ignore unauthorized, malformed, or late renderer messages. */ }
   });
 }
@@ -262,6 +323,12 @@ function createWindows() {
   overlay.setAlwaysOnTop(true, 'screen-saver');
   overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   updateMouseMode();
+  overlay.on('blur', () => resetMouseCapture());
+  overlay.webContents.on('did-start-loading', () => resetMouseCapture(true));
+  overlay.webContents.on('render-process-gone', () => resetMouseCapture(true));
+  overlay.on('closed', () => clearInterval(mousePollTimer));
+  mousePollTimer = setInterval(refreshNativeMouse, 16);
+  mousePollTimer.unref();
 
   const saved = settings.launcherPosition;
   const targetDisplay = saved ? screen.getDisplayNearestPoint(saved) : display;
@@ -363,6 +430,7 @@ if (!app.requestSingleInstanceLock()) {
 app.on('activate', () => { if (overlay) restoreControls(); });
 app.on('before-quit', () => {
   quitting = true;
+  clearInterval(mousePollTimer);
   if (app.isReady()) saveSettings();
 });
 app.on('will-quit', () => {
