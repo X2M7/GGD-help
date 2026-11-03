@@ -59,7 +59,7 @@ namespace GgdHelp
 
     public static class Model
     {
-        public const int PlayerCount = 16, CardWidth = 250, CardHeight = 151;
+        public const int PlayerCount = 16, CardWidth = 300, CardHeight = 160;
         public static readonly string[] Aspects = { "16:9", "16:10", "21:9", "43:18", "64:27", "stretch" };
         public static readonly string[] DeathCauses = { "刀杀", "投票出局", "刺杀", "炸死", "吞食", "连带", "不明" };
         public static readonly string[] RoleKeys = { "good", "neutral", "bad" };

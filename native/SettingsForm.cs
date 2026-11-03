@@ -16,10 +16,10 @@ namespace GgdHelp
         private readonly CheckBox notes;
         private readonly CheckBox death;
         private readonly CheckBox calibration;
-        private readonly ComboBox display;
-        private readonly ComboBox aspect;
-        private readonly ComboBox preset;
-        private readonly NumericUpDown playerCount;
+        private readonly DarkComboBox display;
+        private readonly DarkComboBox aspect;
+        private readonly DarkComboBox preset;
+        private readonly DarkNumericUpDown playerCount;
         private readonly Label displayInfo;
         private readonly TrackBar[] sliders = new TrackBar[5];
         private readonly Label[] sliderValues = new Label[5];
@@ -91,7 +91,7 @@ namespace GgdHelp
             LabelAt("游戏所在显示器", 0, 204, 376, 24);
             display = ComboAt(0, 232, 376);
             Identify(display, "display-select");
-            displayInfo = LabelAt("", 0, 266, 376, 38);
+            displayInfo = LabelAt("", 0, 266, 376, 44);
             displayInfo.ForeColor = CardPalette.Muted;
             display.SelectedIndexChanged += delegate
             {
@@ -135,8 +135,10 @@ namespace GgdHelp
                 RaiseChanged();
             };
             LabelAt("显示人数", 239, 411, 137, 24);
-            playerCount = new NumericUpDown();
-            playerCount.SetBounds(239, 439, 137, 28);
+            playerCount = new DarkNumericUpDown();
+            playerCount.SetBounds(239, 439, 137, 30);
+            playerCount.ApplyScale(1, 30);
+            playerCount.TextAlign = HorizontalAlignment.Center;
             playerCount.Minimum = 1;
             playerCount.Maximum = 16;
             playerCount.BackColor = CardPalette.Input;
@@ -201,10 +203,11 @@ namespace GgdHelp
             return check;
         }
 
-        private ComboBox ComboAt(int x, int y, int width)
+        private DarkComboBox ComboAt(int x, int y, int width)
         {
-            ComboBox combo = new ComboBox();
-            combo.SetBounds(x, y, width, 28);
+            DarkComboBox combo = new DarkComboBox();
+            combo.SetBounds(x, y, width, 30);
+            combo.ApplyScale(1, 30);
             combo.DropDownStyle = ComboBoxStyle.DropDownList;
             combo.FlatStyle = FlatStyle.Flat;
             combo.BackColor = CardPalette.Input;
@@ -321,6 +324,30 @@ namespace GgdHelp
         {
             Action callback = Changed;
             if (callback != null) callback();
+        }
+
+        private void ApplySelectorMetrics()
+        {
+            // The Framework runtime may keep this dialog at its design bounds
+            // even on a high-DPI monitor. Follow the actual content layout, not
+            // the monitor DPI, so selectors cannot grow over the next label.
+            float scale = content.Width / 376f;
+            foreach (DarkComboBox combo in new[] { display, preset, aspect }) combo.ApplyScale(scale, 30);
+            playerCount.ApplyScale(scale, 30);
+            playerCount.Top = aspect.Top + Math.Max(0, (aspect.Height - playerCount.Height) / 2);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            ApplySelectorMetrics();
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            base.WndProc(ref message);
+            if (message.Msg == NativeWindows.WM_DPICHANGED && IsHandleCreated && !IsDisposed)
+                BeginInvoke((Action)delegate { if (!IsDisposed) ApplySelectorMetrics(); });
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)

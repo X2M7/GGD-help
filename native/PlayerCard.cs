@@ -35,6 +35,18 @@ namespace GgdHelp
         }
     }
 
+    internal sealed class CampLabel : Label
+    {
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            // A native Label adds glyph-overhang padding, which used to clip
+            // these single Chinese characters inside their narrow columns.
+            TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, ForeColor,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+        }
+    }
+
     internal sealed class CardTextBox : TextBox
     {
         private readonly string cue;
@@ -56,18 +68,19 @@ namespace GgdHelp
         private Preferences preferences;
         private readonly Func<int> currentRound;
         private readonly Label[] roleLabels = new Label[3];
-        private readonly ComboBox[] roles = new ComboBox[3];
+        private readonly DarkComboBox[] roles = new DarkComboBox[3];
         private readonly TextBox[] notes = new TextBox[2];
         private readonly Button[] deaths = new Button[7];
         private readonly Label deathStatus;
         private readonly Label roundPrefix;
         private readonly Label roundSuffix;
-        private readonly NumericUpDown deathRound;
+        private readonly DarkNumericUpDown deathRound;
         private readonly Button revive;
         private readonly Button dragHandle;
         private readonly ToolTip tips;
         private Font normalFont;
         private Font smallFont;
+        private Font numberFont;
         private double currentScale = -1;
         private bool updating;
         private bool editing = true;
@@ -102,14 +115,15 @@ namespace GgdHelp
             for (int index = 0; index < 3; index++)
             {
                 int group = index;
-                Label label = new Label();
+                Label label = new CampLabel();
                 label.Text = captions[index];
+                label.Name = label.AccessibleName = Name + "-camp-" + Model.RoleKeys[index];
                 label.BackColor = Color.Transparent;
                 label.ForeColor = colors[index];
                 label.TextAlign = ContentAlignment.MiddleLeft;
                 roleLabels[index] = label;
                 Controls.Add(label);
-                ComboBox select = new ComboBox();
+                DarkComboBox select = new DarkComboBox();
                 select.DropDownStyle = ComboBoxStyle.DropDownList;
                 select.FlatStyle = FlatStyle.Flat;
                 select.BackColor = CardPalette.Input;
@@ -182,10 +196,9 @@ namespace GgdHelp
             deathStatus.AutoEllipsis = true;
             roundPrefix = NewLabel("第");
             roundSuffix = NewLabel("轮");
-            deathRound = new NumericUpDown();
+            deathRound = new DarkNumericUpDown();
             deathRound.Minimum = 1;
             deathRound.Maximum = 99;
-            deathRound.BorderStyle = BorderStyle.FixedSingle;
             deathRound.BackColor = CardPalette.Input;
             deathRound.ForeColor = CardPalette.Ink;
             deathRound.TextAlign = HorizontalAlignment.Center;
@@ -283,7 +296,7 @@ namespace GgdHelp
             SuspendLayout();
             try
             {
-                ApplyScale(Math.Max(0.35, Math.Min(3.5, scale)));
+                ApplyScale(Math.Max(0.55, Math.Min(3.5, scale)));
                 string[] selected = { value.roles.good, value.roles.neutral, value.roles.bad };
                 for (int index = 0; index < roles.Length; index++)
                 {
@@ -309,30 +322,43 @@ namespace GgdHelp
             currentScale = scale;
             Font oldNormal = normalFont;
             Font oldSmall = smallFont;
+            Font oldNumber = numberFont;
             float normalSize = (float)Math.Max(6.0, 11.0 * scale);
             float smallSize = (float)Math.Max(5.5, 10.0 * scale);
+            float numberSize = (float)Math.Max(10.0, 13.0 * scale);
             if (normalFont == null || Math.Abs(normalFont.Size - normalSize) > 0.001f)
                 normalFont = new Font("Microsoft YaHei UI", normalSize, FontStyle.Regular, GraphicsUnit.Pixel);
             if (smallFont == null || Math.Abs(smallFont.Size - smallSize) > 0.001f)
                 smallFont = new Font("Microsoft YaHei UI", smallSize, FontStyle.Regular, GraphicsUnit.Pixel);
+            if (numberFont == null || Math.Abs(numberFont.Size - numberSize) > 0.001f)
+                numberFont = new Font("Microsoft YaHei UI", numberSize, FontStyle.Regular, GraphicsUnit.Pixel);
             Font = normalFont;
             foreach (Control control in Controls) control.Font = normalFont;
             deathStatus.Font = smallFont;
             roundPrefix.Font = smallFont;
             roundSuffix.Font = smallFont;
             revive.Font = smallFont;
-            foreach (ComboBox select in roles)
+            deathRound.Font = numberFont;
+            foreach (DarkComboBox select in roles)
             {
+                select.ApplyScale(scale, 26);
                 select.DropDownWidth = Px(130);
                 select.DropDownHeight = Px(240);
             }
+            deathRound.ApplyScale(scale, 26);
             if (oldNormal != null && !Object.ReferenceEquals(oldNormal, normalFont)) oldNormal.Dispose();
             if (oldSmall != null && !Object.ReferenceEquals(oldSmall, smallFont)) oldSmall.Dispose();
+            if (oldNumber != null && !Object.ReferenceEquals(oldNumber, numberFont)) oldNumber.Dispose();
         }
 
         private int Px(double value) { return Math.Max(1, (int)Math.Round(value * currentScale)); }
-        private void Place(Control control, double x, double y, double width, double height)
-        { control.SetBounds((int)Math.Round(x * currentScale), (int)Math.Round(y * currentScale), Px(width), Px(height)); }
+        private void PlaceInRow(Control control, double x, int y, double width, int rowHeight)
+        {
+            control.SetBounds(Px(x), y, Px(width), rowHeight);
+            // Native selectors may enforce a font-dependent minimum height.
+            // Center their final bounds instead of assuming SetBounds won.
+            control.Top = y + Math.Max(0, (rowHeight - control.Height) / 2);
+        }
 
         private void ArrangeControls()
         {
@@ -340,44 +366,50 @@ namespace GgdHelp
             bool any = feature.roles || feature.notes || feature.death;
             HasVisibleContent = any || calibrating;
             Visible = HasVisibleContent && player.id <= preferences.playerCount;
-            double y = 7;
+            int y = Px(7), gap = Px(5);
+            int roleHeight = Px(26);
+            foreach (DarkComboBox select in roles) roleHeight = Math.Max(roleHeight, select.Height);
             for (int index = 0; index < 3; index++)
             {
                 roleLabels[index].Visible = feature.roles;
                 roles[index].Visible = feature.roles;
                 if (feature.roles)
                 {
-                    Place(roleLabels[index], 8 + index * 80, y, 12, 24);
-                    Place(roles[index], 22 + index * 80, y, 60, 24);
+                    PlaceInRow(roleLabels[index], 8 + index * 96, y, 18, roleHeight);
+                    PlaceInRow(roles[index], 28 + index * 96, y, 72, roleHeight);
                 }
             }
-            if (feature.roles) y += 29;
+            if (feature.roles) y += roleHeight + gap;
+            int noteHeight = Math.Max(Px(26), normalFont.Height + Px(4));
             for (int index = 0; index < 2; index++)
             {
                 notes[index].Visible = feature.notes;
-                if (feature.notes) Place(notes[index], 8 + index * 120, y, 114, 24);
+                if (feature.notes) PlaceInRow(notes[index], 8 + index * 146, y, 138, noteHeight);
             }
-            if (feature.notes) y += 29;
+            if (feature.notes) y += noteHeight + gap;
             foreach (Button button in deaths) button.Visible = feature.death;
             deathStatus.Visible = roundPrefix.Visible = roundSuffix.Visible = deathRound.Visible = revive.Visible = feature.death;
             if (feature.death)
             {
-                for (int index = 0; index < deaths.Length; index++) Place(deaths[index], 8 + index * 34, y, 30, 22);
-                y += 25;
-                Place(deathStatus, 8, y, 119, 24);
-                Place(roundPrefix, 128, y, 13, 24);
-                Place(deathRound, 141, y + 1, 40, 23);
-                Place(roundSuffix, 183, y, 13, 24);
-                Place(revive, 198, y, 44, 24);
-                y += 29;
+                int buttonHeight = Math.Max(Px(24), normalFont.Height + Px(4));
+                for (int index = 0; index < deaths.Length; index++) PlaceInRow(deaths[index], 8 + index * (288.0 / 7), y, 260.0 / 7, buttonHeight);
+                y += buttonHeight + gap;
+                int recordHeight = Math.Max(Px(26), Math.Max(deathRound.Height, smallFont.Height + Px(4)));
+                PlaceInRow(deathStatus, 8, y, 132, recordHeight);
+                PlaceInRow(roundPrefix, 146, y, 12, recordHeight);
+                PlaceInRow(deathRound, 162, y, 66, recordHeight);
+                PlaceInRow(roundSuffix, 232, y, 12, recordHeight);
+                PlaceInRow(revive, 248, y, 44, recordHeight);
+                y += recordHeight + gap;
             }
             dragHandle.Visible = calibrating;
             if (calibrating)
             {
-                Place(dragHandle, 8, any ? y : 7, 22, 23);
-                y = (any ? y : 7) + 28;
+                int handleHeight = Math.Max(Px(23), normalFont.Height + Px(4));
+                PlaceInRow(dragHandle, 8, any ? y : Px(7), 22, handleHeight);
+                y = (any ? y : Px(7)) + handleHeight + gap;
             }
-            Size = new Size(Px(any ? 250 : 38), Px(Math.Max(1, y + 2)));
+            Size = new Size(Px(any ? Model.CardWidth : 38), Math.Max(1, y + Px(2)));
         }
 
         private void UpdateDeath()
@@ -436,6 +468,7 @@ namespace GgdHelp
                 tips.Dispose();
                 if (normalFont != null) normalFont.Dispose();
                 if (smallFont != null) smallFont.Dispose();
+                if (numberFont != null) numberFont.Dispose();
             }
             base.Dispose(disposing);
         }

@@ -83,6 +83,11 @@ internal static class NativeSmoke
             Check(Directory.GetFiles(runDirectory).Length == 1, "standalone folder contains only the exe");
             Console.WriteLine("Isolated profile: " + profile);
             StartApp();
+            Step("repeated process starts preserve painting and topmost state");
+            for (int launch = 0; launch < 2; launch++) { StopApp(); StartApp(); }
+            VerifyCampLabels();
+            VerifySelectorAppearance();
+            VerifyNumericSelectors();
             Step("toolbar, roles and Unicode notes");
             Click("round-next");
             Wait(delegate { return Convert.ToInt32(Session()["round"]) == 2; }, "round advances to 2");
@@ -106,6 +111,7 @@ internal static class NativeSmoke
                     && (string)p["notes2"] == "中文记录二 · 独立备注"
                     && (string)roles["good"] != "" && (string)roles["neutral"] != "" && (string)roles["bad"] != "";
             }, "both Unicode notes and all three roles are saved");
+            SelectRoleWithMouse("player-1-role-good", 3, "正义使者");
             string expectedRoles = Json.Serialize(Player()["roles"]);
 
             Step("death, round and revival");
@@ -119,6 +125,19 @@ internal static class NativeSmoke
 
             Step("feature switches preserve notes and roles");
             Click("settings-toggle");
+            foreach (string id in new[] { "display-select", "resolution-preset", "aspect-select", "player-count" })
+                CheckDarkArrow(id);
+            System.Windows.Rect aspectBounds = Find("aspect-select", true).Current.BoundingRectangle;
+            System.Windows.Rect countBounds = Find("player-count", true).Current.BoundingRectangle;
+            Check(Math.Abs(aspectBounds.Top + aspectBounds.Height / 2 - countBounds.Top - countBounds.Height / 2) <= 2,
+                "settings dropdown and number selector share the same visual center line");
+            Check(Find("resolution-preset", true).Current.BoundingRectangle.Bottom <=
+                Find("预设只调整画面比例，不会修改系统分辨率。", true).Current.BoundingRectangle.Top + 2,
+                "resolution selector does not cover its explanatory caption");
+            Check(Find("display-select", true).Current.BoundingRectangle.Bottom <=
+                FindTextPrefix("此显示器的位置校准会单独保存。").Current.BoundingRectangle.Top + 2,
+                "display selector does not cover the monitor information");
+            Capture("native-selectors-settings.png");
             foreach (string feature in new[] { "roles", "notes", "death" })
             {
                 SetChecked("feature-" + feature, false);
@@ -136,11 +155,12 @@ internal static class NativeSmoke
             Step("transparent nickname strip sends clicks to controlled window");
             AutomationElement card = Find("player-1", true);
             System.Windows.Rect rect = card.Current.BoundingRectangle;
-            double scale = rect.Width / 250.0;
+            double scale = rect.Width / 300.0;
             Point namePoint = new Point((int)(rect.Left + rect.Width / 2), (int)(rect.Top - 14 * scale));
             int clicksBefore = backdrop.ClickCount;
             ClickPoint(namePoint, true);
             Wait(delegate { return backdrop.ClickCount == clicksBefore + 1; }, "nickname strip click reaches the backdrop");
+            Check((ExtendedStyle(overlayWindow) & 8L) != 0, "overlay stays topmost after activating the game-like backdrop");
 
             Step("lock releases focus and launcher can restore editing");
             Click("player-1-notes-1");
@@ -228,7 +248,7 @@ internal static class NativeSmoke
             CheckToolbarPainted();
             Capture("native-smoke-restart.png");
             StopApp();
-            Console.WriteLine("PASS: standalone native exe; real mouse controls, Unicode text, roles, death/revival, feature switches, click-through, focus release, hotkeys, card/launcher dragging and restart persistence.");
+            Console.WriteLine("PASS: standalone native exe; dark translucent selectors, mouse dropdown choice, numeric arrows and limits, Unicode text, roles, death/revival, feature switches, click-through, focus release, hotkeys, card/launcher dragging and restart persistence.");
             Console.WriteLine("Host: " + Environment.OSVersion + "; this result does not claim Windows 10 or a real game was tested.");
             exitCode = 0;
         }
@@ -261,6 +281,12 @@ internal static class NativeSmoke
         IntPtr handle = new IntPtr(next.Current.NativeWindowHandle);
         overlayWindow = GetAncestor(handle, 2);
         Check(overlayWindow != IntPtr.Zero, "toolbar belongs to an overlay HWND");
+        Wait(delegate { return IsWindowVisible(overlayWindow) && (ExtendedStyle(overlayWindow) & 8L) != 0; },
+            "visible overlay retains WS_EX_TOPMOST after initial handle creation");
+        uint colorKey, alphaFlags; byte alpha;
+        bool hasAlpha = GetLayeredWindowAttributes(overlayWindow, out colorKey, out alpha, out alphaFlags);
+        Console.WriteLine("Overlay display: visible=" + IsWindowVisible(overlayWindow) + ", alpha=" + (hasAlpha ? alpha.ToString() : "unknown")
+            + ", flags=" + alphaFlags + ", style=" + ExtendedStyle(overlayWindow).ToString("X"));
         Thread.Sleep(250);
         Capture("native-smoke-start.png");
         CheckToolbarPainted();
@@ -273,8 +299,9 @@ internal static class NativeSmoke
             foreach (AutomationElement element in toolbar.FindAll(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text)))
                 if (element.Current.Name.StartsWith("GGD-help", StringComparison.Ordinal)) { brand = element; break; }
-            return brand != null && HasPaintedColor(brand, Color.FromArgb(142, 226, 195), 8)
-                && HasPaintedColor(Find("round-next", true), Color.FromArgb(37, 55, 67), 30);
+            Color surface = Color.FromArgb(42, 54, 64);
+            return brand != null && HasPaintedColor(brand, Blend(Color.FromArgb(142, 226, 195), surface, .90), 8)
+                && HasPaintedColor(Find("round-next", true), Blend(Color.FromArgb(37, 55, 67), surface, .90), 30);
         }, "toolbar brand text and round button are visibly painted");
     }
 
@@ -289,9 +316,161 @@ internal static class NativeSmoke
             int matching = 0;
             for (int y = 0; y < pixels.Height; y++)
                 for (int x = 0; x < pixels.Width; x++)
-                    if (pixels.GetPixel(x, y).ToArgb() == expected.ToArgb() && ++matching >= required) return true;
+                    if (CloseColor(pixels.GetPixel(x, y), expected, 3) && ++matching >= required) return true;
         }
         return false;
+    }
+
+    private static Color Blend(Color foreground, Color background, double opacity)
+    {
+        return Color.FromArgb((int)Math.Round(foreground.R * opacity + background.R * (1 - opacity)),
+            (int)Math.Round(foreground.G * opacity + background.G * (1 - opacity)),
+            (int)Math.Round(foreground.B * opacity + background.B * (1 - opacity)));
+    }
+
+    private static bool CloseColor(Color first, Color second, int tolerance)
+    {
+        return Math.Abs(first.R - second.R) <= tolerance && Math.Abs(first.G - second.G) <= tolerance
+            && Math.Abs(first.B - second.B) <= tolerance;
+    }
+
+    private static void VerifySelectorAppearance()
+    {
+        Step("dark selector arrows and real foreground transparency");
+        foreach (string id in new[] { "round-input", "player-1-role-good", "player-1-death-round" })
+            CheckDarkArrow(id);
+        System.Windows.Rect bounds = Find("player-1-role-good", true).Current.BoundingRectangle;
+        // Near the lower left corner, away from text, arrows, borders and focus cues.
+        Point sample = new Point((int)(bounds.Left + bounds.Width * .25), (int)(bounds.Bottom - Math.Max(3, bounds.Height * .18)));
+        Color before = Pixel(sample);
+        backdrop.Invoke(new Action(delegate { backdrop.BackColor = Color.FromArgb(230, 184, 140); backdrop.Refresh(); }));
+        Thread.Sleep(350);
+        Color after = Pixel(sample);
+        Check(after.R - before.R >= 3 && after.G - before.G >= 2,
+            "selector surface shows the live controlled backdrop through alpha (" + before + " -> " + after + ")");
+        Capture("native-selectors-transparency.png");
+        backdrop.Invoke(new Action(delegate { backdrop.BackColor = Color.FromArgb(42, 54, 64); backdrop.Refresh(); }));
+        Thread.Sleep(350);
+        CheckToolbarPainted();
+    }
+
+    private static void VerifyCampLabels()
+    {
+        Step("camp labels remain visible beside their dropdowns");
+        string[] groups = { "good", "neutral", "bad" };
+        Color[] ink = { Color.FromArgb(142, 226, 195), Color.FromArgb(230, 205, 136), Color.FromArgb(241, 151, 143) };
+        Color plate = Blend(Color.FromArgb(13, 25, 34), Color.FromArgb(42, 54, 64), .68);
+        foreach (int player in new[] { 1, 16 })
+            for (int group = 0; group < groups.Length; group++) {
+                string prefix = "player-" + player;
+                AutomationElement label = Find(prefix + "-camp-" + groups[group], true);
+                System.Windows.Rect labelBounds = label.Current.BoundingRectangle;
+                System.Windows.Rect selectorBounds = Find(prefix + "-role-" + groups[group], true).Current.BoundingRectangle;
+                Check(!labelBounds.IsEmpty && labelBounds.Width > 0 && labelBounds.Right + 1 <= selectorBounds.Left,
+                    prefix + " " + groups[group] + " label has its own visible column outside the dropdown");
+                Color expected = Blend(ink[group], plate, .90);
+                Wait(delegate { return HasPaintedColor(label, expected, 4); },
+                    prefix + " " + groups[group] + " Chinese camp label is visibly painted");
+            }
+        Capture("native-selectors-camp-labels.png");
+    }
+
+    private static Color Pixel(Point point)
+    {
+        using (Bitmap image = new Bitmap(1, 1))
+        using (Graphics graphics = Graphics.FromImage(image))
+        { graphics.CopyFromScreen(point, Point.Empty, image.Size); return image.GetPixel(0, 0); }
+    }
+
+    private static void CheckDarkArrow(string id)
+    {
+        System.Windows.Rect bounds = Find(id, true).Current.BoundingRectangle;
+        Rectangle area = new Rectangle((int)(bounds.Right - Math.Max(10, bounds.Height * .60)),
+            (int)bounds.Top + 2, (int)Math.Max(7, bounds.Height * .60) - 2, Math.Max(1, (int)bounds.Height - 4));
+        using (Bitmap pixels = new Bitmap(area.Width, area.Height))
+        using (Graphics graphics = Graphics.FromImage(pixels))
+        {
+            graphics.CopyFromScreen(area.Location, Point.Empty, area.Size);
+            int white = 0;
+            for (int y = 0; y < pixels.Height; y++) for (int x = 0; x < pixels.Width; x++) {
+                Color color = pixels.GetPixel(x, y);
+                if (color.R > 210 && color.G > 210 && color.B > 210) white++;
+            }
+            Check(white < pixels.Width * pixels.Height / 5, id + " has no system-white arrow block");
+        }
+    }
+
+    private static void NumericArrow(string id, bool up)
+    {
+        System.Windows.Rect bounds = Find(id, true).Current.BoundingRectangle;
+        ClickPoint(new Point((int)(bounds.Right - Math.Max(4, bounds.Height * .25)),
+            (int)(bounds.Top + bounds.Height * (up ? .25 : .75))), false);
+        Thread.Sleep(SystemInformation.DoubleClickTime + 30);
+    }
+
+    private static void TypeNumber(string id, string value)
+    {
+        System.Windows.Rect bounds = Find(id, true).Current.BoundingRectangle;
+        ClickPoint(new Point((int)(bounds.Left + bounds.Width * .3), (int)(bounds.Top + bounds.Height / 2)), false);
+        Thread.Sleep(SystemInformation.DoubleClickTime + 30);
+        EnsureAppForeground();
+        KeyEvent(Keys.ControlKey, false); PressKey(Keys.A); KeyEvent(Keys.ControlKey, true);
+        SendUnicode(value); PressKey(Keys.Tab);
+    }
+
+    private static void VerifyNumericSelectors()
+    {
+        Step("numeric arrows, direct entry and the 1/99 limits");
+        NumericArrow("round-input", true);
+        Wait(delegate { return Convert.ToInt32(Session()["round"]) == 2; }, "toolbar upper arrow increments");
+        NumericArrow("round-input", false);
+        Wait(delegate { return Convert.ToInt32(Session()["round"]) == 1; }, "toolbar lower arrow decrements");
+        NumericArrow("round-input", false);
+        Check(Convert.ToInt32(Session()["round"]) == 1, "toolbar lower bound is one");
+        TypeNumber("round-input", "99");
+        Wait(delegate { return Convert.ToInt32(Session()["round"]) == 99; }, "toolbar accepts direct numeric entry");
+        NumericArrow("round-input", true);
+        Check(Convert.ToInt32(Session()["round"]) == 99, "toolbar upper bound is 99");
+        TypeNumber("round-input", "1");
+        Wait(delegate { return Convert.ToInt32(Session()["round"]) == 1; }, "toolbar numeric entry restores round one");
+
+        TypeNumber("player-1-death-round", "99");
+        NumericArrow("player-1-death-round", true);
+        Click("player-1-death-knife");
+        Wait(delegate { return Player()["death"] != null && Convert.ToInt32(Object(Player()["death"])["round"]) == 99; },
+            "card numeric entry and upper limit are used when recording death");
+        NumericArrow("player-1-death-round", false);
+        Wait(delegate { return Convert.ToInt32(Object(Player()["death"])["round"]) == 98; }, "card lower arrow decrements");
+        TypeNumber("player-1-death-round", "1");
+        Wait(delegate { return Convert.ToInt32(Object(Player()["death"])["round"]) == 1; }, "card accepts direct numeric entry");
+        NumericArrow("player-1-death-round", false);
+        Check(Convert.ToInt32(Object(Player()["death"])["round"]) == 1, "card lower bound is one");
+        Click("player-1-revive");
+        Wait(delegate { return Player()["death"] == null; }, "numeric smoke leaves player alive");
+    }
+
+    private static void SelectRoleWithMouse(string id, int index, string expected)
+    {
+        Step("actual mouse selection from the dark role dropdown");
+        AutomationElement element = Find(id, true);
+        IntPtr handle = new IntPtr(element.Current.NativeWindowHandle);
+        Check(handle != IntPtr.Zero, "role selector retains a native HWND");
+        COMBOBOXINFO info = new COMBOBOXINFO { size = Marshal.SizeOf(typeof(COMBOBOXINFO)) };
+        Check(GetComboBoxInfo(handle, ref info), "native dropdown metadata is available");
+        System.Windows.Rect bounds = element.Current.BoundingRectangle;
+        ClickPoint(new Point((int)(bounds.Right - bounds.Height * .3), (int)(bounds.Top + bounds.Height / 2)), false);
+        Thread.Sleep(SystemInformation.DoubleClickTime + 30);
+        Wait(delegate { return IsWindowVisible(info.list); }, "dropdown opens with the mouse arrow");
+        RECT listBounds, itemBounds = new RECT();
+        Check(GetWindowRect(info.list, out listBounds), "dropdown has screen bounds");
+        Check(SendMessage(info.list, 0x0198, new IntPtr(index), ref itemBounds).ToInt64() != -1, "dropdown item bounds are available");
+        Capture("native-selectors-dropdown.png");
+        ClickPoint(new Point(listBounds.Left + (itemBounds.Left + itemBounds.Right) / 2,
+            listBounds.Top + (itemBounds.Top + itemBounds.Bottom) / 2), false);
+        Thread.Sleep(SystemInformation.DoubleClickTime + 30);
+        Wait(delegate { return (string)Object(Player()["roles"])["good"] == expected && !IsWindowVisible(info.list); },
+            "mouse selects a full four-character role and closes the list");
+        CheckDarkArrow(id);
     }
 
     private static void StopApp()
@@ -335,6 +514,16 @@ internal static class NativeSmoke
     {
         AutomationElement element = Find(id, false);
         return element != null && !element.Current.IsOffscreen && !element.Current.BoundingRectangle.IsEmpty;
+    }
+
+    private static AutomationElement FindTextPrefix(string prefix)
+    {
+        foreach (AutomationElement window in AutomationElement.RootElement.FindAll(TreeScope.Children,
+            new PropertyCondition(AutomationElement.ProcessIdProperty, running.Id)))
+            foreach (AutomationElement element in window.FindAll(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text)))
+                if (element.Current.Name.StartsWith(prefix, StringComparison.Ordinal)) return element;
+        throw new Exception("Missing caption: " + prefix);
     }
 
     private static void Click(string id)
@@ -513,6 +702,7 @@ internal static class NativeSmoke
     [StructLayout(LayoutKind.Sequential)] private struct MOUSEINPUT { public int dx, dy; public uint mouseData, flags, time; public IntPtr extra; }
     [StructLayout(LayoutKind.Sequential)] private struct KEYBDINPUT { public ushort key, scan; public uint flags, time; public IntPtr extra; }
     [StructLayout(LayoutKind.Sequential)] private struct RECT { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct COMBOBOXINFO { public int size; public RECT item, button; public uint state; public IntPtr combo, edit, list; }
     [DllImport("user32.dll", SetLastError = true)] private static extern uint SendInput(uint count, INPUT[] inputs, int size);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(Point point);
@@ -521,6 +711,9 @@ internal static class NativeSmoke
     [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr window, uint flags);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out RECT rectangle);
+    [DllImport("user32.dll")] private static extern bool GetComboBoxInfo(IntPtr window, ref COMBOBOXINFO info);
+    [DllImport("user32.dll")] private static extern bool GetLayeredWindowAttributes(IntPtr window, out uint colorKey, out byte alpha, out uint flags);
+    [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr parameter, ref RECT rectangle);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
     [DllImport("user32.dll")] private static extern bool SetProcessDPIAware();

@@ -24,8 +24,9 @@ namespace GgdHelp
         private readonly List<PlayerCard> cards = new List<PlayerCard>();
         private readonly System.Windows.Forms.Timer saveTimer;
         private readonly System.Windows.Forms.Timer restoreTimer;
+        private readonly System.Windows.Forms.Timer repaintTimer;
         private FlowLayoutPanel toolbar;
-        private NumericUpDown round;
+        private DarkNumericUpDown round;
         private Label summary;
         private Label saveStatus;
         private bool visible = true, locked, calibrating, updating, exiting, initializing = true;
@@ -39,11 +40,17 @@ namespace GgdHelp
             string startupMessage = StateStore.LastMessage;
             if (StateStore.LoadFailed && MessageBox.Show(startupMessage + "\r\n\r\n继续以空白记录启动？原始数据不会修改。\r\n选择“否”退出，先关闭旧版或修复记录后再启动。", "旧记录读取失败", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 throw new OperationCanceledException("已取消启动，原始记录保持不变。");
-            overlay = new OverlayForm(); background = new CardBackgroundForm(); launcher = new LauncherForm();
+            overlay = new OverlayForm { Opacity = 0.90 }; background = new CardBackgroundForm(); launcher = new LauncherForm();
             saveTimer = new System.Windows.Forms.Timer { Interval = 250 };
             saveTimer.Tick += delegate { SaveNow(); };
             restoreTimer = new System.Windows.Forms.Timer { Interval = 250 };
             restoreTimer.Tick += delegate { if (restoreEvent.WaitOne(0)) Restore(); };
+            repaintTimer = new System.Windows.Forms.Timer { Interval = 80 };
+            repaintTimer.Tick += delegate {
+                repaintTimer.Stop();
+                if (!exiting && visible) { background.Refresh(); overlay.Refresh(); }
+                if (!exiting) launcher.Refresh();
+            };
             launcher.ToggleRequested += delegate { SetVisible(!visible); };
             launcher.LockRequested += delegate { SetLocked(!locked); };
             launcher.MenuRequested += ShowMenu;
@@ -73,9 +80,11 @@ namespace GgdHelp
         private static Color PanelColor { get { return Color.FromArgb(16, 27, 37); } }
         private Button Button(string text, string id, Action action)
         {
-            Button button = new Button { Text = text, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(37, 55, 67), ForeColor = Color.FromArgb(237, 247, 247), Padding = new Padding(7, 4, 7, 4),
-                Margin = new Padding(4), UseVisualStyleBackColor = false };
+            float dpi = NativeWindows.GetDpiScale(display);
+            Button button = new Button { Text = text, AutoSize = false, FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(37, 55, 67), ForeColor = Color.FromArgb(237, 247, 247), Font = toolbarFont,
+                Size = new Size(TextRenderer.MeasureText(text, toolbarFont).Width + (int)(18 * dpi), (int)(32 * dpi)),
+                Margin = new Padding((int)(4 * dpi)), UseVisualStyleBackColor = false };
             button.FlatAppearance.BorderColor = Color.FromArgb(72, 99, 110); Identify(button, id);
             button.Click += delegate { action(); }; return button;
         }
@@ -89,22 +98,29 @@ namespace GgdHelp
                 BackColor = PanelColor, ForeColor = Color.White, Font = toolbarFont, Padding = new Padding((int)(8 * dpi)),
                 Location = new Point((int)(16 * dpi), (int)(14 * dpi)), MaximumSize = new Size(Math.Max(300, display.Bounds.Width - (int)(32 * dpi)), 0) };
             Identify(toolbar, "toolbar");
-            toolbar.Controls.Add(new Label { Text = "GGD-help  V" + Program.Version, ForeColor = Color.FromArgb(142, 226, 195), AutoSize = true, Margin = new Padding(5, 12, 12, 5) });
+            toolbar.Controls.Add(new Label { Text = "GGD-help  V" + Program.Version, ForeColor = Color.FromArgb(142, 226, 195),
+                Size = new Size((int)(152 * dpi), (int)(32 * dpi)), TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding((int)(4 * dpi)) });
             toolbar.Controls.Add(Button("−", "round-prev", delegate { ChangeRound(state.session.round - 1); }));
-            round = new NumericUpDown { Minimum = 1, Maximum = 99, Value = state.session.round, Width = (int)(54 * dpi),
-                TextAlign = HorizontalAlignment.Center, Margin = new Padding(4, (int)(8 * dpi), 4, 4), BackColor = PanelColor, ForeColor = Color.White };
+            round = new DarkNumericUpDown { Minimum = 1, Maximum = 99, Value = state.session.round, Width = (int)(70 * dpi),
+                Font = toolbarFont, TextAlign = HorizontalAlignment.Center, Margin = new Padding((int)(4 * dpi)) };
+            round.ApplyScale(dpi, 32);
+            int roundSpace = Math.Max(0, (int)(32 * dpi) - round.Height);
+            round.Margin = new Padding((int)(4 * dpi), (int)(4 * dpi) + roundSpace / 2,
+                (int)(4 * dpi), (int)(4 * dpi) + roundSpace - roundSpace / 2);
             Identify(round, "round-input");
             round.ValueChanged += delegate { if (!updating) ChangeRound((int)round.Value); };
             toolbar.Controls.Add(round);
             toolbar.Controls.Add(Button("＋", "round-next", delegate { ChangeRound(state.session.round + 1); }));
-            summary = new Label { AutoSize = true, Margin = new Padding(8, 12, 8, 5), ForeColor = Color.FromArgb(172, 189, 199) };
+            summary = new Label { Size = new Size((int)(110 * dpi), (int)(32 * dpi)), TextAlign = ContentAlignment.MiddleCenter,
+                Margin = new Padding((int)(4 * dpi)), ForeColor = Color.FromArgb(172, 189, 199) };
             toolbar.Controls.Add(summary);
             toolbar.Controls.Add(Button("穿透游戏", "lock-button", delegate { SetLocked(true); }));
             toolbar.Controls.Add(Button("位置 / 设置", "settings-toggle", ShowSettings));
             toolbar.Controls.Add(Button("新对局", "new-game", NewMatch));
             toolbar.Controls.Add(Button("收起", "hide-button", delegate { SetVisible(false); }));
             toolbar.Controls.Add(Button("退出", "quit-button", Quit));
-            saveStatus = new Label { AutoSize = true, MaximumSize = new Size((int)(240 * dpi), 0), Margin = new Padding(8, 12, 4, 5),
+            saveStatus = new Label { Size = new Size((int)(180 * dpi), (int)(32 * dpi)), TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = true, Margin = new Padding((int)(4 * dpi)),
                 ForeColor = Color.FromArgb(142, 226, 195), Text = "自动保存" };
             Identify(saveStatus, "save-status"); toolbar.Controls.Add(saveStatus);
             overlay.Controls.Add(toolbar); toolbar.BringToFront(); UpdateSummary();
@@ -258,6 +274,9 @@ namespace GgdHelp
             // particular, the first show must render untouched toolbar controls.
             if (visible) { background.Refresh(); overlay.Refresh(); }
             launcher.Refresh();
+            // The first layered surface may not exist until after ShowWindow
+            // returns to the message loop. Repaint once after it is composited.
+            repaintTimer.Stop(); repaintTimer.Start();
         }
         private void UpdateLauncher()
         {
@@ -342,12 +361,12 @@ namespace GgdHelp
         private void Quit()
         {
             if (exiting) return; exiting = true; SaveNow();
-            restoreTimer.Stop(); saveTimer.Stop();
+            restoreTimer.Stop(); saveTimer.Stop(); repaintTimer.Stop();
             SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             NativeWindows.UnregisterHotKey(overlay.Handle, 1); NativeWindows.UnregisterHotKey(overlay.Handle, 2);
             tray.Visible = false; tray.Dispose();
             if (settings != null) settings.Dispose(); launcher.Dispose(); background.Dispose(); overlay.Exiting = true; overlay.Dispose();
-            saveTimer.Dispose(); restoreTimer.Dispose(); if (toolbarFont != null) toolbarFont.Dispose(); ExitThread();
+            saveTimer.Dispose(); restoreTimer.Dispose(); repaintTimer.Dispose(); if (toolbarFont != null) toolbarFont.Dispose(); ExitThread();
         }
         protected override void ExitThreadCore()
         {

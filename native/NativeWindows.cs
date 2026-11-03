@@ -138,7 +138,16 @@ namespace GgdHelp
                 SetWindowPos(handle, HwndTopmost, 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             }
-            finally { SetExtendedStyle(handle, originalStyle); }
+            finally {
+                // SetWindowPos above adds WS_EX_TOPMOST. Restoring the entire
+                // earlier snapshot would remove it on the first show, allowing
+                // the game or backplate to cover the controls after a click.
+                // Restore only the temporary NOACTIVATE bit we changed.
+                long currentStyle = GetExtendedStyle(handle);
+                if ((originalStyle & WS_EX_NOACTIVATE) == 0) currentStyle &= ~(long)WS_EX_NOACTIVATE;
+                else currentStyle |= WS_EX_NOACTIVATE;
+                SetExtendedStyle(handle, currentStyle);
+            }
             // Showing the launcher while editing must also preserve the overlay's
             // input focus; only repair focus accidentally taken by this show.
             if (previousForeground != handle && previousForeground != IntPtr.Zero
