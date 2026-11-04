@@ -21,6 +21,7 @@ namespace GgdHelp
         private readonly LauncherForm launcher;
         private SettingsForm settings;
         private readonly NotifyIcon tray;
+        private readonly ContextMenuStrip launcherMenu;
         private readonly List<PlayerCard> cards = new List<PlayerCard>();
         private readonly System.Windows.Forms.Timer saveTimer;
         private readonly System.Windows.Forms.Timer restoreTimer;
@@ -67,6 +68,7 @@ namespace GgdHelp
             tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "GGD-help V" + Program.Version, Visible = true };
             tray.DoubleClick += delegate { Restore(); };
             tray.ContextMenuStrip = BuildMenu();
+            launcherMenu = BuildMenu();
             if (!NativeWindows.RegisterHotKey(overlay.Handle, 1, NativeWindows.MOD_CONTROL | NativeWindows.MOD_SHIFT, Keys.G)) warning = "显示快捷键被占用，请用悬浮开关";
             if (!NativeWindows.RegisterHotKey(overlay.Handle, 2, NativeWindows.MOD_CONTROL | NativeWindows.MOD_SHIFT, Keys.L)) warning = "穿透快捷键被占用，请用悬浮开关";
             SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
@@ -281,7 +283,6 @@ namespace GgdHelp
         private void UpdateLauncher()
         {
             launcher.UpdateState(visible, locked, warning);
-            if (tray != null) { ContextMenuStrip old = tray.ContextMenuStrip; tray.ContextMenuStrip = BuildMenu(); if (old != null) old.Dispose(); }
         }
         private void Restore()
         {
@@ -290,25 +291,44 @@ namespace GgdHelp
         private ContextMenuStrip BuildMenu()
         {
             ContextMenuStrip menu = new ContextMenuStrip();
-            menu.Items.Add(visible ? "收起蒙版  Ctrl+Shift+G" : "显示蒙版  Ctrl+Shift+G", null, delegate { SetVisible(!visible); });
-            menu.Items.Add(locked ? "允许编辑  Ctrl+Shift+L" : "穿透游戏  Ctrl+Shift+L", null, delegate { SetLocked(!locked); });
-            menu.Items.Add("位置 / 设置", null, delegate { ShowSettings(); });
+            ToolStripItem visibility = menu.Items.Add("", null, MenuAction(delegate { SetVisible(!visible); }));
+            ToolStripItem editing = menu.Items.Add("", null, MenuAction(delegate { SetLocked(!locked); }));
+            menu.Items.Add("位置 / 设置", null, MenuAction(ShowSettings));
             ToolStripMenuItem monitors = new ToolStripMenuItem("游戏所在显示器");
-            foreach (Screen item in Screen.AllScreens) {
-                Screen selected = item;
-                ToolStripMenuItem entry = new ToolStripMenuItem(item.DeviceName + " · " + item.Bounds.Width + "×" + item.Bounds.Height) { Checked = item.DeviceName == state.selectedDisplay };
-                entry.Click += delegate { SelectDisplay(selected.DeviceName, true); }; monitors.DropDownItems.Add(entry);
-            }
-            menu.Items.Add(monitors); menu.Items.Add("找回开关并恢复编辑", null, delegate { Restore(); });
-            menu.Items.Add(new ToolStripSeparator()); menu.Items.Add("导出记录 JSON", null, delegate { Export(); });
-            menu.Items.Add("退出 GGD-help", null, delegate { Quit(); });
+            menu.Items.Add(monitors); menu.Items.Add("找回开关并恢复编辑", null, MenuAction(Restore));
+            menu.Items.Add(new ToolStripSeparator()); menu.Items.Add("导出记录 JSON", null, MenuAction(Export));
+            menu.Items.Add("退出 GGD-help", null, MenuAction(Quit));
+            menu.Opening += delegate {
+                visibility.Text = visible ? "收起蒙版  Ctrl+Shift+G" : "显示蒙版  Ctrl+Shift+G";
+                editing.Text = locked ? "允许编辑  Ctrl+Shift+L" : "穿透游戏  Ctrl+Shift+L";
+                // Refresh before opening, never replace or dispose the menu
+                // while Windows is still dispatching an item click or close.
+                while (monitors.DropDownItems.Count > 0) {
+                    ToolStripItem old = monitors.DropDownItems[0];
+                    monitors.DropDownItems.Remove(old); old.Dispose();
+                }
+                foreach (Screen item in Screen.AllScreens) {
+                    Screen selected = item;
+                    ToolStripMenuItem entry = new ToolStripMenuItem(item.DeviceName + " · " + item.Bounds.Width + "×" + item.Bounds.Height) { Checked = item.DeviceName == state.selectedDisplay };
+                    entry.Click += MenuAction(delegate { SelectDisplay(selected.DeviceName, true); });
+                    monitors.DropDownItems.Add(entry);
+                }
+            };
             return menu;
+        }
+        private EventHandler MenuAction(Action action)
+        {
+            return delegate {
+                if (exiting || overlay.IsDisposed || !overlay.IsHandleCreated) return;
+                // ToolStripDropDown reparents its native window after Click and
+                // Closed events return. Finish that dispatch before changing
+                // windows, opening a dialog or disposing menus during Quit.
+                overlay.BeginInvoke((Action)delegate { if (!exiting) action(); });
+            };
         }
         private void ShowMenu()
         {
-            ContextMenuStrip menu = BuildMenu();
-            menu.Closed += delegate { menu.Dispose(); };
-            menu.Show(launcher, new Point(launcher.Width - 10, launcher.Height));
+            launcherMenu.Show(launcher, new Point(launcher.Width - 10, launcher.Height));
         }
         private void NewMatch()
         {
@@ -364,7 +384,10 @@ namespace GgdHelp
             restoreTimer.Stop(); saveTimer.Stop(); repaintTimer.Stop();
             SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             NativeWindows.UnregisterHotKey(overlay.Handle, 1); NativeWindows.UnregisterHotKey(overlay.Handle, 2);
-            tray.Visible = false; tray.Dispose();
+            tray.Visible = false;
+            ContextMenuStrip trayMenu = tray.ContextMenuStrip;
+            tray.ContextMenuStrip = null; tray.Dispose();
+            trayMenu.Dispose(); launcherMenu.Dispose();
             if (settings != null) settings.Dispose(); launcher.Dispose(); background.Dispose(); overlay.Exiting = true; overlay.Dispose();
             saveTimer.Dispose(); restoreTimer.Dispose(); repaintTimer.Dispose(); if (toolbarFont != null) toolbarFont.Dispose(); ExitThread();
         }

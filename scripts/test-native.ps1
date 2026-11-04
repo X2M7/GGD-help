@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectDirectory = Split-Path -Parent $PSScriptRoot
 if (-not $Executable) {
-    $Executable = Join-Path $projectDirectory 'release\GGD-help-V0.2.1-win-x64.exe'
+    $Executable = Join-Path $projectDirectory 'release\GGD-help-V0.2.2-win-x64.exe'
 }
 $artifactDirectory = Join-Path $projectDirectory 'artifacts'
 New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null

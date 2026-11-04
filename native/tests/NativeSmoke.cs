@@ -196,8 +196,11 @@ internal static class NativeSmoke
             Shortcut(Keys.L);
             Wait(delegate { return (ExtendedStyle(overlayWindow) & 0x20L) == 0; }, "Ctrl+Shift+L restores editing");
 
-            Step("physical card calibration and draggable launcher");
-            Click("settings-toggle");
+            VerifyLauncherMenuLifecycle();
+
+            Step("launcher menu settings, physical card calibration and draggable launcher");
+            ChooseLauncherMenuItem("位置 / 设置");
+            Wait(delegate { return Visible("calibration-toggle"); }, "settings opens from a real launcher menu click");
             SetChecked("calibration-toggle", true);
             Click("settings-close");
             System.Windows.Rect beforeDrag = Find("player-1", true).Current.BoundingRectangle;
@@ -206,7 +209,7 @@ internal static class NativeSmoke
                 && Math.Abs(Find("player-1", true).Current.BoundingRectangle.Top - beforeDrag.Top - 22) < 3; }, "card follows physical mouse drag");
             string expectedProfiles = null;
             Wait(delegate { expectedProfiles = Json.Serialize(State()["profiles"]); return expectedProfiles.Contains("positions"); }, "calibrated position is saved");
-            Click("settings-toggle");
+            ChooseLauncherMenuItem("位置 / 设置");
             SetChecked("calibration-toggle", false);
             Click("settings-close");
             AutomationElement launcherButton = Find("launcher-toggle", true);
@@ -247,8 +250,8 @@ internal static class NativeSmoke
             Thread.Sleep(350);
             CheckToolbarPainted();
             Capture("native-smoke-restart.png");
-            StopApp();
-            Console.WriteLine("PASS: standalone native exe; dark translucent selectors, mouse dropdown choice, numeric arrows and limits, Unicode text, roles, death/revival, feature switches, click-through, focus release, hotkeys, card/launcher dragging and restart persistence.");
+            StopApp(true);
+            Console.WriteLine("PASS: standalone native exe; dark translucent selectors, mouse dropdown choice, numeric arrows and limits, Unicode text, roles, death/revival, feature switches, click-through, focus release, hotkeys, launcher menu actions and exit, card/launcher dragging and restart persistence.");
             Console.WriteLine("Host: " + Environment.OSVersion + "; this result does not claim Windows 10 or a real game was tested.");
             exitCode = 0;
         }
@@ -473,22 +476,74 @@ internal static class NativeSmoke
         CheckDarkArrow(id);
     }
 
-    private static void StopApp()
+    private static AutomationElement FindMenuItem(string caption)
     {
-        if (Visible("quit-button"))
+        if (running == null || running.HasExited) return null;
+        Condition match = new AndCondition(
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.MenuItem),
+            new PropertyCondition(AutomationElement.NameProperty, caption));
+        foreach (AutomationElement window in AutomationElement.RootElement.FindAll(TreeScope.Children,
+            new PropertyCondition(AutomationElement.ProcessIdProperty, running.Id)))
+            foreach (AutomationElement item in window.FindAll(TreeScope.Element | TreeScope.Descendants, match))
+                if (!item.Current.IsOffscreen && !item.Current.BoundingRectangle.IsEmpty) return item;
+        return null;
+    }
+
+    private static void ChooseLauncherMenuItem(string caption)
+    {
+        // On adjacent monitors Windows may place a right-edge popup on the
+        // next screen. Keep this fixture and all physical input on its backdrop.
+        AutomationElement button = Find("launcher-menu", true);
+        IntPtr launcherHandle = GetAncestor(new IntPtr(button.Current.NativeWindowHandle), 2);
+        RECT launcherRect;
+        Check(GetWindowRect(launcherHandle, out launcherRect), "launcher bounds before popup");
+        int reserve = Math.Min(500, displayBounds.Width / 2);
+        int moveLeft = Math.Max(0, launcherRect.Right - (displayBounds.Right - reserve));
+        if (moveLeft > 0) {
+            double scale = (launcherRect.Right - launcherRect.Left) / 280.0;
+            Drag(new Point(launcherRect.Left + (int)(18 * scale), launcherRect.Top + (int)(22 * scale)),
+                new Point(-moveLeft, 0));
+        }
+        Click("launcher-menu");
+        AutomationElement item = null;
+        Wait(delegate { item = FindMenuItem(caption); return item != null && item.Current.IsEnabled; },
+            "launcher popup item is visible: " + caption);
+        ClickElement(item);
+        ThrowIfApplicationError();
+    }
+
+    private static void VerifyLauncherMenuLifecycle()
+    {
+        Step("repeated real launcher popup actions close without disposed-menu exceptions");
+        for (int repeat = 0; repeat < 2; repeat++)
+        {
+            ChooseLauncherMenuItem("收起蒙版  Ctrl+Shift+G");
+            Wait(delegate { return !IsWindowVisible(overlayWindow); }, "popup hides the overlay");
+            ChooseLauncherMenuItem("显示蒙版  Ctrl+Shift+G");
+            Wait(delegate { return IsWindowVisible(overlayWindow) && Visible("round-next"); }, "popup shows the overlay");
+            ChooseLauncherMenuItem("穿透游戏  Ctrl+Shift+L");
+            Wait(delegate { return (ExtendedStyle(overlayWindow) & 0x20L) != 0; }, "popup enables click-through");
+            ChooseLauncherMenuItem("允许编辑  Ctrl+Shift+L");
+            Wait(delegate { return (ExtendedStyle(overlayWindow) & 0x20L) == 0; }, "popup restores editing");
+        }
+        ChooseLauncherMenuItem("找回开关并恢复编辑");
+        Wait(delegate { return IsWindowVisible(overlayWindow) && (ExtendedStyle(overlayWindow) & 0x20L) == 0
+            && Visible("launcher-toggle"); }, "popup recovery keeps both windows usable");
+    }
+
+    private static void StopApp(bool forceMenu = false)
+    {
+        if (!forceMenu && Visible("quit-button"))
         {
             Click("quit-button");
-            if (!running.WaitForExit(8000)) throw new Exception("Application did not quit through the toolbar.");
+            Wait(delegate { return running.HasExited; }, "application quits through the toolbar", 8000);
             Check(running.ExitCode == 0, "application exits cleanly");
             running.Dispose();
             running = null;
             return;
         }
-        Click("launcher-menu");
-        AutomationElement quit = null;
-        Wait(delegate { quit = Find("quit-app", false) ?? Find("退出 GGD-help", false) ?? Find("quit-button", false); return quit != null; }, "quit menu opens");
-        ClickElement(quit);
-        if (!running.WaitForExit(8000)) throw new Exception("Application did not quit through its menu.");
+        ChooseLauncherMenuItem("退出 GGD-help");
+        Wait(delegate { return running.HasExited; }, "application quits through its popup menu", 8000);
         Check(running.ExitCode == 0, "application exits cleanly");
         running.Dispose();
         running = null;
@@ -638,13 +693,48 @@ internal static class NativeSmoke
     private static void Check(bool condition, string message) { if (!condition) throw new Exception("Assertion failed: " + message); }
     private static void Step(string message) { Console.WriteLine("Checking " + message + "..."); }
 
+    private static void ThrowIfApplicationError()
+    {
+        if (running == null || running.HasExited) return;
+        foreach (AutomationElement window in AutomationElement.RootElement.FindAll(TreeScope.Children,
+            new AndCondition(new PropertyCondition(AutomationElement.ProcessIdProperty, running.Id),
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window))))
+        {
+            try
+            {
+                if (window.Current.IsOffscreen) continue;
+                string title = window.Current.Name;
+                if (title.IndexOf(".NET Framework", StringComparison.OrdinalIgnoreCase) >= 0)
+                    throw new Exception("Application displayed a .NET Framework exception dialog: " + title);
+                object pattern;
+                bool modal = window.TryGetCurrentPattern(WindowPattern.Pattern, out pattern)
+                    && ((WindowPattern)pattern).Current.IsModal;
+                if (!modal && title != "GGD-help" && window.Current.ClassName != "#32770") continue;
+                foreach (AutomationElement text in window.FindAll(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text)))
+                {
+                    string message = text.Current.Name;
+                    if (message.IndexOf("Unhandled exception", StringComparison.OrdinalIgnoreCase) >= 0
+                        || message.Contains("未经处理的异常") || message.Contains("未处理的异常")
+                        || message.Contains("ObjectDisposedException") || message.Contains("GGD-help 无法继续运行"))
+                        throw new Exception("Application displayed an error dialog: " + message);
+                }
+            }
+            catch (ElementNotAvailableException) { }
+        }
+    }
+
     private static void Wait(Func<bool> check, string message, int timeout = 6000)
     {
         Stopwatch timer = Stopwatch.StartNew();
         Exception last = null;
         while (timer.ElapsedMilliseconds < timeout)
         {
-            try { if (check()) return; }
+            try
+            {
+                ThrowIfApplicationError();
+                if (check()) { ThrowIfApplicationError(); return; }
+            }
             catch (IOException error) { last = error; }
             catch (ElementNotAvailableException error) { last = error; }
             catch (InvalidOperationException error) { last = error; }

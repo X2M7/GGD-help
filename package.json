@@ -1,7 +1,7 @@
 {
   "name": "ggd-help",
   "productName": "GGD-help",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "鹅鸭杀透明会议蒙版：身份、死亡记录和分辨率校准",
   "main": "index.js",
   "scripts": {
@@ -9,6 +9,7 @@
     "check": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1",
     "test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-native-models.ps1",
     "test:components": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-native-components.ps1",
+    "test:menus": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-native-menus.ps1",
     "test:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-native.ps1",
     "test:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-native.ps1",
     "package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1",
