@@ -85,7 +85,7 @@ internal static class NativeSmoke
             StartApp();
             Step("repeated process starts preserve painting and topmost state");
             for (int launch = 0; launch < 2; launch++) { StopApp(); StartApp(); }
-            VerifyCampLabels();
+            VerifyRoleSelectors();
             VerifySelectorAppearance();
             VerifyNumericSelectors();
             Step("toolbar, roles and Unicode notes");
@@ -97,12 +97,21 @@ internal static class NativeSmoke
             Wait(delegate { return Convert.ToInt32(Session()["round"]) == 2; }, "round advances again before entering records");
             TypeInto("player-1-notes-1", "中文记录一 · native smoke");
             TypeInto("player-1-notes-2", "中文记录二 · 独立备注");
-            foreach (string group in new[] { "good", "neutral", "bad" })
-            {
-                Click("player-1-role-" + group);
-                EnsureAppForeground();
-                PressKey(Keys.Home); PressKey(Keys.Down); PressKey(Keys.Enter);
-                Thread.Sleep(100);
+            string[] camps = { "好", "中", "坏" };
+            string[] campKeys = { "good", "neutral", "bad" };
+            string[] choices = { "清醒梦者", "布谷鸟", "剑客鸭" };
+            Check(!Find("player-1-role", true).Current.IsEnabled, "role list waits for a camp choice");
+            for (int group = 0; group < camps.Length; group++) {
+                SelectComboWithMouse("player-1-camp", camps[group]);
+                string campKey = campKeys[group];
+                Wait(delegate { return (string)Player()["camp"] == campKey && Find("player-1-role", true).Current.IsEnabled; },
+                    "camp selection enables its role list");
+                Check(ComboContains("player-1-role", choices[group]), "selected camp includes its expected role");
+                Check(!ComboContains("player-1-role", choices[(group + 1) % choices.Length]), "other camps' roles stay out of this list");
+                SelectComboWithMouse("player-1-role", choices[group]);
+                string choice = choices[group];
+                Wait(delegate { return (string)Player()["role"] == choice && (string)Object(Player()["roles"])[campKey] == choice; },
+                    "specific role is saved for its camp");
             }
             Wait(delegate {
                 IDictionary<string, object> p = Player();
@@ -111,7 +120,10 @@ internal static class NativeSmoke
                     && (string)p["notes2"] == "中文记录二 · 独立备注"
                     && (string)roles["good"] != "" && (string)roles["neutral"] != "" && (string)roles["bad"] != "";
             }, "both Unicode notes and all three roles are saved");
-            SelectRoleWithMouse("player-1-role-good", 3, "正义使者");
+            SelectComboWithMouse("player-1-camp", "好");
+            Wait(delegate { return (string)Player()["role"] == "清醒梦者"; }, "switching camp restores its previous guess");
+            SelectComboWithMouse("player-1-role", "正义使者");
+            Wait(delegate { return (string)Player()["role"] == "正义使者"; }, "four-character role is saved");
             string expectedRoles = Json.Serialize(Player()["roles"]);
 
             Step("death, round and revival");
@@ -141,8 +153,9 @@ internal static class NativeSmoke
             foreach (string feature in new[] { "roles", "notes", "death" })
             {
                 SetChecked("feature-" + feature, false);
-                string control = feature == "roles" ? "player-1-role-good" : feature == "notes" ? "player-1-notes-1" : "player-1-death-knife";
+                string control = feature == "roles" ? "player-1-role" : feature == "notes" ? "player-1-notes-1" : "player-1-death-knife";
                 Wait(delegate { return !Visible(control); }, feature + " controls disappear");
+                if (feature == "roles") Check(!Visible("player-1-camp"), "feature switch hides both linked selectors");
             }
             SetChecked("feature-roles", true);
             SetChecked("feature-notes", true);
@@ -236,6 +249,8 @@ internal static class NativeSmoke
             Check(!Visible("player-1-notes-1"), "hidden notes stay hidden after restart");
             Check(Convert.ToInt32(Session()["round"]) == 2, "round survives restart");
             Check(Json.Serialize(Player()["roles"]) == expectedRoles, "roles survive restart");
+            Check((string)Player()["camp"] == "good" && (string)Player()["role"] == "正义使者",
+                "selected camp and specific role survive restart");
             Check((string)Object(Player()["death"])["cause"] == "炸死", "death record survives restart");
             Check(Json.Serialize(State()["profiles"]) == expectedProfiles, "calibrated layout survives restart");
             Check(Convert.ToInt32(State()["launcherX"]) == expectedLauncherX && Convert.ToInt32(State()["launcherY"]) == expectedLauncherY,
@@ -274,6 +289,17 @@ internal static class NativeSmoke
 
     private static void StartApp()
     {
+        // Let the fixture finish showing/activating before starting the overlay.
+        // Otherwise its initial activation can race the app's no-activate show.
+        // A background-launched driver may lack foreground permission. Give
+        // real input only to our own fixture, then remove its temporary topmost
+        // flag before launching the app so it cannot cover the overlay.
+        backdrop.Invoke(new Action(delegate { backdrop.TopMost = true; backdrop.BringToFront(); }));
+        ClickPoint(new Point(displayBounds.Left + displayBounds.Width / 2, displayBounds.Top + displayBounds.Height / 2), true);
+        backdrop.Invoke(new Action(delegate { backdrop.TopMost = false; backdrop.Activate(); }));
+        Wait(delegate { return WindowProcess(GetForegroundWindow()) == Process.GetCurrentProcess().Id; },
+            "controlled backdrop is foreground before application startup");
+        Thread.Sleep(200);
         ProcessStartInfo info = new ProcessStartInfo(copiedExecutable);
         info.WorkingDirectory = Path.GetDirectoryName(copiedExecutable);
         info.UseShellExecute = false;
@@ -340,9 +366,9 @@ internal static class NativeSmoke
     private static void VerifySelectorAppearance()
     {
         Step("dark selector arrows and real foreground transparency");
-        foreach (string id in new[] { "round-input", "player-1-role-good", "player-1-death-round" })
+        foreach (string id in new[] { "round-input", "player-1-camp", "player-1-role", "player-1-death-round" })
             CheckDarkArrow(id);
-        System.Windows.Rect bounds = Find("player-1-role-good", true).Current.BoundingRectangle;
+        System.Windows.Rect bounds = Find("player-1-camp", true).Current.BoundingRectangle;
         // Near the lower left corner, away from text, arrows, borders and focus cues.
         Point sample = new Point((int)(bounds.Left + bounds.Width * .25), (int)(bounds.Bottom - Math.Max(3, bounds.Height * .18)));
         Color before = Pixel(sample);
@@ -357,25 +383,22 @@ internal static class NativeSmoke
         CheckToolbarPainted();
     }
 
-    private static void VerifyCampLabels()
+    private static void VerifyRoleSelectors()
     {
-        Step("camp labels remain visible beside their dropdowns");
-        string[] groups = { "good", "neutral", "bad" };
-        Color[] ink = { Color.FromArgb(142, 226, 195), Color.FromArgb(230, 205, 136), Color.FromArgb(241, 151, 143) };
-        Color plate = Blend(Color.FromArgb(13, 25, 34), Color.FromArgb(42, 54, 64), .68);
-        foreach (int player in new[] { 1, 16 })
-            for (int group = 0; group < groups.Length; group++) {
-                string prefix = "player-" + player;
-                AutomationElement label = Find(prefix + "-camp-" + groups[group], true);
-                System.Windows.Rect labelBounds = label.Current.BoundingRectangle;
-                System.Windows.Rect selectorBounds = Find(prefix + "-role-" + groups[group], true).Current.BoundingRectangle;
-                Check(!labelBounds.IsEmpty && labelBounds.Width > 0 && labelBounds.Right + 1 <= selectorBounds.Left,
-                    prefix + " " + groups[group] + " label has its own visible column outside the dropdown");
-                Color expected = Blend(ink[group], plate, .90);
-                Wait(delegate { return HasPaintedColor(label, expected, 4); },
-                    prefix + " " + groups[group] + " Chinese camp label is visibly painted");
-            }
-        Capture("native-selectors-camp-labels.png");
+        Step("two linked role selectors fit their row");
+        foreach (int player in new[] { 1, 16 }) {
+            string prefix = "player-" + player;
+            System.Windows.Rect card = Find(prefix, true).Current.BoundingRectangle;
+            System.Windows.Rect camp = Find(prefix + "-camp", true).Current.BoundingRectangle;
+            System.Windows.Rect role = Find(prefix + "-role", true).Current.BoundingRectangle;
+            Check(!camp.IsEmpty && camp.Width > 0 && camp.Right + 1 <= role.Left && role.Right <= card.Right,
+                "camp and role have separate non-overlapping dropdowns");
+            Check(Math.Abs(camp.Top - role.Top) <= 1 && Math.Abs(camp.Height - role.Height) <= 1,
+                "linked selectors share their baseline");
+            Check(role.Width > camp.Width, "specific role has space for its full name");
+            Check(!Find(prefix + "-role", true).Current.IsEnabled, "no specific role until a camp is selected");
+        }
+        Capture("native-selectors-linked-roles.png");
     }
 
     private static Color Pixel(Point point)
@@ -452,18 +475,27 @@ internal static class NativeSmoke
         Wait(delegate { return Player()["death"] == null; }, "numeric smoke leaves player alive");
     }
 
-    private static void SelectRoleWithMouse(string id, int index, string expected)
+    private static bool ComboContains(string id, string text)
     {
-        Step("actual mouse selection from the dark role dropdown");
+        IntPtr handle = new IntPtr(Find(id, true).Current.NativeWindowHandle);
+        return SendMessageText(handle, 0x0158, new IntPtr(-1), text).ToInt64() >= 0;
+    }
+
+    private static void SelectComboWithMouse(string id, string expected)
+    {
+        Step("actual mouse choice " + id + " = " + expected);
         AutomationElement element = Find(id, true);
         IntPtr handle = new IntPtr(element.Current.NativeWindowHandle);
         Check(handle != IntPtr.Zero, "role selector retains a native HWND");
+        int index = (int)SendMessageText(handle, 0x0158, new IntPtr(-1), expected).ToInt64();
+        Check(index >= 0, "requested option exists in the filtered list: " + expected);
         COMBOBOXINFO info = new COMBOBOXINFO { size = Marshal.SizeOf(typeof(COMBOBOXINFO)) };
         Check(GetComboBoxInfo(handle, ref info), "native dropdown metadata is available");
         System.Windows.Rect bounds = element.Current.BoundingRectangle;
         ClickPoint(new Point((int)(bounds.Right - bounds.Height * .3), (int)(bounds.Top + bounds.Height / 2)), false);
         Thread.Sleep(SystemInformation.DoubleClickTime + 30);
         Wait(delegate { return IsWindowVisible(info.list); }, "dropdown opens with the mouse arrow");
+        SendMessageValue(info.list, 0x0197, new IntPtr(index), IntPtr.Zero);
         RECT listBounds, itemBounds = new RECT();
         Check(GetWindowRect(info.list, out listBounds), "dropdown has screen bounds");
         Check(SendMessage(info.list, 0x0198, new IntPtr(index), ref itemBounds).ToInt64() != -1, "dropdown item bounds are available");
@@ -471,8 +503,8 @@ internal static class NativeSmoke
         ClickPoint(new Point(listBounds.Left + (itemBounds.Left + itemBounds.Right) / 2,
             listBounds.Top + (itemBounds.Top + itemBounds.Bottom) / 2), false);
         Thread.Sleep(SystemInformation.DoubleClickTime + 30);
-        Wait(delegate { return (string)Object(Player()["roles"])["good"] == expected && !IsWindowVisible(info.list); },
-            "mouse selects a full four-character role and closes the list");
+        Wait(delegate { return SendMessageValue(handle, 0x0147, IntPtr.Zero, IntPtr.Zero).ToInt64() == index
+            && !IsWindowVisible(info.list); }, "mouse selects the option and closes the list");
         CheckDarkArrow(id);
     }
 
@@ -804,6 +836,10 @@ internal static class NativeSmoke
     [DllImport("user32.dll")] private static extern bool GetComboBoxInfo(IntPtr window, ref COMBOBOXINFO info);
     [DllImport("user32.dll")] private static extern bool GetLayeredWindowAttributes(IntPtr window, out uint colorKey, out byte alpha, out uint flags);
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr parameter, ref RECT rectangle);
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessageText(IntPtr window, int message, IntPtr parameter, string text);
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern IntPtr SendMessageValue(IntPtr window, int message, IntPtr parameter, IntPtr value);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
     [DllImport("user32.dll")] private static extern bool SetProcessDPIAware();

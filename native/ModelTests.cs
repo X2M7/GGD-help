@@ -35,6 +35,7 @@ namespace GgdHelp
             Check(migrated.session.players[0].roles.good == "警长" && migrated.session.players[0].notes == "旧备注", "legacy identity and reordered IDs");
             Check(migrated.session.players[1].roles.neutral == "鹈鹕", "legacy neutral identity");
             Check(migrated.session.players[2].roles.bad == "", "explicit cleared grouped role overrides legacy");
+            TestRoleSelections();
             Check(migrated.preferences.features.roles && migrated.preferences.features.notes && migrated.preferences.features.death, "old preferences default visible");
             AppState malformed = StateStore.ImportJson("{\"session\":{\"players\":[{\"id\":1,\"notes\":\"\\u0000hello\",\"death\":{\"round\":300,\"cause\":\"?\"}}]},\"preferences\":{\"opacity\":null,\"playerCount\":\"1\",\"features\":{\"roles\":\"false\",\"notes\":false}}}");
             Check(malformed.session.players[0].notes == "hello" && malformed.session.players[0].death.round == 99, "control characters and bounds");
@@ -76,6 +77,83 @@ namespace GgdHelp
             TestLoadFailureFlag();
             Console.WriteLine("Native model/storage checks passed: " + assertions);
         }
+        private static void TestRoleSelections()
+        {
+            Player fresh = Model.CreateSession().players[0];
+            Check(fresh.camp == "" && Model.GetCamp(fresh) == "" && Model.GetRole(fresh) == "", "new player has no inferred camp");
+            Model.SelectRole(fresh, "警长");
+            Check(fresh.role == "" && fresh.roles.good == "", "a specific role requires a selected camp");
+
+            AppState old = StateStore.ImportJson("{\"session\":{\"players\":[{\"id\":1,\"roles\":{\"good\":\"警长\",\"neutral\":\"鹈鹕\",\"bad\":\"刺客\"}}]}}");
+            Player player = old.session.players[0];
+            Check(player.camp == "good" && player.role == "警长", "old grouped guesses choose the first recorded camp");
+            Check(player.roles.good == "警长" && player.roles.neutral == "鹈鹕" && player.roles.bad == "刺客", "migration retains all three old guesses");
+            Model.SelectCamp(player, "neutral");
+            Check(player.camp == "neutral" && player.role == "鹈鹕" && Model.GetRole(player) == "鹈鹕", "changing camp restores its saved guess");
+            Model.SelectRole(player, "鸽子");
+            Check(player.roles.neutral == "鸽子" && player.role == "鸽子" && player.roles.good == "警长" && player.roles.bad == "刺客", "specific role updates only its camp");
+            Player restored = StateStore.ImportJson(StateStore.ExportJson(old)).session.players[0];
+            Check(restored.camp == "neutral" && restored.role == "鸽子" && restored.roles.good == "警长" && restored.roles.bad == "刺客", "active camp and other guesses survive JSON export/import");
+            Model.SelectCamp(player, "bad");
+            Check(player.role == "刺客", "bad camp restores its previous guess");
+            Model.SelectRole(player, "");
+            Check(player.camp == "bad" && player.role == "" && player.roles.bad == "" && player.roles.neutral == "鸽子", "clearing a role keeps camp and other guesses");
+            Model.SelectCamp(player, "");
+            restored = StateStore.ImportJson(StateStore.ExportJson(old)).session.players[0];
+            Check(restored.camp == "" && restored.role == "" && restored.roles.good == "警长", "explicit undetermined camp survives normalization with saved guesses");
+            Model.SelectCamp(restored, "good");
+            Check(restored.role == "警长", "reselecting camp restores a hidden old guess");
+
+            AppState matching = StateStore.ImportJson("{\"session\":{\"players\":[{\"id\":1,\"role\":\"鹈鹕\",\"roles\":{\"good\":\"警长\",\"neutral\":\"鹈鹕\",\"bad\":\"刺客\"}},{\"id\":2,\"role\":\"刺客\",\"roles\":{}},{\"id\":3,\"camp\":\"\",\"roles\":{\"good\":\"警长\"}},{\"id\":4,\"camp\":null,\"roles\":{\"neutral\":\"鹈鹕\"}},{\"id\":5,\"camp\":true,\"roles\":{\"bad\":\"刺客\"}}]}}");
+            Check(matching.session.players[0].camp == "neutral", "matching old singular role preserves its active camp");
+            Check(matching.session.players[1].camp == "" && matching.session.players[1].role == "", "explicit old grouped clear does not revive stale singular role");
+            Check(matching.session.players[2].camp == "" && matching.session.players[2].role == "", "explicit empty camp is not migrated again");
+            Check(matching.session.players[3].camp == "neutral", "null camp follows old-record migration");
+            Check(matching.session.players[4].camp == "" && matching.session.players[4].roles.bad == "刺客", "invalid camp type does not erase saved guesses");
+
+            AppState custom = StateStore.ImportJson("{\"session\":{\"players\":[{\"id\":1,\"role\":\"自定义旧身份\"},{\"id\":2,\"roles\":{\"bad\":\"未收录鸭身份\"}},{\"id\":3,\"role\":\"未归类旧身份\",\"roles\":{\"good\":\"警长\"}}]}}");
+            Check(custom.session.players[0].camp == "" && Model.GetRole(custom.session.players[0]) == "自定义旧身份", "unclassified legacy role is preserved without guessing its camp");
+            Check(custom.session.players[1].camp == "bad" && Model.GetRole(custom.session.players[1]) == "未收录鸭身份", "custom grouped role retains its known camp");
+            Check(custom.session.players[2].camp == "" && Model.GetRole(custom.session.players[2]) == "未归类旧身份" && custom.session.players[2].roles.good == "警长", "unclassified legacy role and grouped guess both survive migration");
+            for (int repeat = 0; repeat < 3; repeat++) custom = StateStore.ImportJson(StateStore.ExportJson(custom));
+            Check(custom.session.players[0].role == "自定义旧身份" && custom.session.players[2].role == "未归类旧身份", "repeated normalization retains unclassified legacy roles");
+            Model.SelectCamp(custom.session.players[0], "good");
+            Check(custom.session.players[0].camp == "good" && custom.session.players[0].roles.good == "自定义旧身份", "user can classify an imported custom role without losing it");
+            Model.SelectRole(custom.session.players[2], "");
+            Check(custom.session.players[2].camp == "" && custom.session.players[2].role == "" && custom.session.players[2].roles.good == "警长", "clearing unclassified role preserves grouped guesses");
+
+            Player raw = new Player { id = 1, role = "鹈鹕" };
+            Check(Model.GetCamp(raw) == "neutral" && Model.GetRole(raw) == "鹈鹕" && raw.roles == null && raw.camp == null, "selection getters support raw legacy records without mutating them");
+            Model.SelectCamp(raw, "neutral");
+            Check(raw.roles.neutral == "鹈鹕" && raw.role == "鹈鹕", "first selection materializes legacy roles");
+
+            AppState aliases = StateStore.ImportJson("{\"session\":{\"players\":[{\"id\":1,\"role\":\"加拿大\"},{\"id\":2,\"roles\":{\"good\":\"模仿\",\"neutral\":\"呆呆\",\"bad\":\"食鸭鸟\"}},{\"id\":3,\"role\":\"中立\"},{\"id\":4,\"roles\":{\"neutral\":\"中立\"}},{\"id\":5,\"role\":\"坏比\"},{\"id\":6,\"camp\":\"neutral\",\"role\":\"中立\"}]}}");
+            Check(aliases.session.players[0].camp == "good" && aliases.session.players[0].role == "加拿大鹅", "legacy short name migrates to canonical goose role");
+            Check(aliases.session.players[1].roles.good == "模仿者" && aliases.session.players[1].roles.neutral == "呆呆鸟" && aliases.session.players[1].roles.bad == "食鸟鸭", "grouped aliases normalize without losing guesses");
+            Check(aliases.session.players[2].camp == "neutral" && aliases.session.players[2].role == "", "old singular neutral placeholder becomes camp without a fabricated role");
+            Check(aliases.session.players[3].camp == "neutral" && aliases.session.players[3].role == "", "old grouped neutral placeholder retains the camp");
+            Check(aliases.session.players[4].camp == "bad" && aliases.session.players[4].role == "鸭子", "old generic duck name migrates to the base role");
+            Check(aliases.session.players[5].camp == "neutral" && aliases.session.players[5].role == "", "new explicit neutral camp also normalizes old placeholder");
+            aliases = StateStore.ImportJson(StateStore.ExportJson(aliases));
+            Check(aliases.session.players[2].camp == "neutral" && aliases.session.players[3].camp == "neutral", "neutral placeholder migration stays stable on export/reload");
+
+            AppState laterCatalog = StateStore.ImportJson("{\"session\":{\"players\":[{\"id\":1,\"camp\":\"\",\"role\":\"清醒梦者\",\"roles\":{}},{\"id\":2,\"camp\":\"\",\"role\":\"清醒梦者\",\"roles\":{}}]}}");
+            laterCatalog = StateStore.ImportJson(StateStore.ExportJson(laterCatalog));
+            Check(laterCatalog.session.players[0].camp == "" && laterCatalog.session.players[0].role == "清醒梦者", "a newly recognized unclassified role survives a later catalog upgrade");
+            Model.SelectCamp(laterCatalog.session.players[0], "good");
+            Check(laterCatalog.session.players[0].role == "清醒梦者", "classifying a newly recognized role into its camp keeps its text");
+            Model.SelectCamp(laterCatalog.session.players[1], "bad");
+            Check(laterCatalog.session.players[1].role == "" && laterCatalog.session.players[1].roles.bad == "", "classifying into a different camp does not insert a known foreign-camp role");
+
+            HashSet<string> names = new HashSet<string>(StringComparer.Ordinal);
+            for (int group = 0; group < Model.RoleGroups.Length; group++) foreach (string name in Model.RoleGroups[group]) {
+                Check(!String.IsNullOrWhiteSpace(name) && names.Add(name), "catalog roles are nonempty and unique: " + name);
+                Check(RoleCatalog.InferCamp(name) == Model.RoleKeys[group], "catalog role infers its declared camp: " + name);
+                Check(RoleCatalog.NormalizeName(RoleCatalog.NormalizeName(name)) == name, "catalog normalization is stable: " + name);
+            }
+            Check(RoleCatalog.InferCamp("清醒梦者") == "good" && RoleCatalog.InferCamp("喜鹊") == "neutral" && RoleCatalog.InferCamp("布谷鸟") == "neutral"
+                && RoleCatalog.InferCamp("剑客鸭") == "bad", "recent Steam roles have their respective camps");
+        }
         private static void TestSnappy()
         {
             // Literal 'abc', followed by an overlapping two-byte-offset copy.
@@ -94,11 +172,14 @@ namespace GgdHelp
             Directory.CreateDirectory(directory);
             try {
                 AppState state = Model.CreateState(); state.session.players[0].notes = "first";
+                Model.SelectCamp(state.session.players[0], "good"); Model.SelectRole(state.session.players[0], "警长");
                 StateStore.Save(directory, state);
                 state.session.players[0].notes = "second"; state.session.round = 5; state.profiles["screen"] = Model.CreateLayout();
+                Model.SelectCamp(state.session.players[0], "neutral"); Model.SelectRole(state.session.players[0], "鹈鹕");
                 StateStore.Save(directory, state);
                 AppState loaded = StateStore.Load(directory);
                 Check(loaded.session.players[0].notes == "second" && loaded.session.round == 5 && loaded.profiles.ContainsKey("screen"), "atomic save round trip");
+                Check(loaded.session.players[0].camp == "neutral" && loaded.session.players[0].role == "鹈鹕" && loaded.session.players[0].roles.good == "警长", "selected camp, role and old guess survive disk save/reload");
                 Check(StateStore.ImportFile(Path.Combine(directory, StateStore.FileName + ".bak")).session.players[0].notes == "first", "previous state backup");
                 File.WriteAllText(Path.Combine(directory, StateStore.FileName), "{corrupt");
                 loaded = StateStore.Load(directory);

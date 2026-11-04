@@ -22,6 +22,9 @@ namespace GgdHelp
     {
         public int id;
         public string name = "", role = "", notes = "", notes2 = "";
+        // Null identifies records written before the linked camp/role selectors.
+        // Empty is an explicit "undetermined" choice and must survive reloads.
+        public string camp;
         public Roles roles;
         public Death death;
         [ScriptIgnore] public bool hasId = true;
@@ -64,11 +67,7 @@ namespace GgdHelp
         public static readonly string[] DeathCauses = { "刀杀", "投票出局", "刺杀", "炸死", "吞食", "连带", "不明" };
         public static readonly string[] RoleKeys = { "good", "neutral", "bad" };
         public static readonly string[] RoleLabels = { "好", "中", "坏" };
-        public static readonly string[][] RoleGroups = {
-            new[] { "好人", "肉汁", "正义使者", "警长", "加拿大", "殡仪员", "网红", "模仿", "侦探", "工程师", "复仇", "观鸟", "保镖", "政治家", "锁匠", "冒险家", "星界行者", "流浪儿童", "追踪者", "跟踪者" },
-            new[] { "中立", "呆呆", "秃鹫", "鹈鹕", "鸽子", "猎鹰", "决斗呆呆" },
-            new[] { "坏比", "丧葬者", "隐形", "食鸭鸟", "变形者", "静语者", "专业杀手", "间谍", "刺客", "雇佣杀手", "告密者", "派对狂", "爆炸王", "身份窃贼", "忍者", "连环杀手", "术士", "超能力" }
-        };
+        public static readonly string[][] RoleGroups = RoleCatalog.Groups;
         public static readonly ResolutionPreset[] ResolutionPresets = {
             new ResolutionPreset(1280,720,"16:9"), new ResolutionPreset(1366,768,"16:9"),
             new ResolutionPreset(1600,900,"16:9"), new ResolutionPreset(1920,1080,"16:9"),
@@ -94,12 +93,95 @@ namespace GgdHelp
             }
             return text.ToString();
         }
+        private static string CleanRole(string value) { return Clean(RoleCatalog.NormalizeName(Clean(value, 32)), 32); }
+        private static string ValidCamp(string value) { return Array.IndexOf(RoleKeys, value) >= 0 ? value : ""; }
+        private static string InferRoleCamp(string role) { return RoleCatalog.InferCamp(role); }
+        private static string GroupRole(Roles roles, string camp)
+        {
+            if (roles == null) return "";
+            return CleanRole(camp == "good" ? roles.good : camp == "neutral" ? roles.neutral : camp == "bad" ? roles.bad : "");
+        }
+        private static void SetGroupRole(Roles roles, string camp, string role)
+        {
+            if (camp == "good") roles.good = role;
+            else if (camp == "neutral") roles.neutral = role;
+            else if (camp == "bad") roles.bad = role;
+        }
+        private static Roles CopyRoles(Player value)
+        {
+            if (value.roles != null) return new Roles {
+                good = CleanRole(value.roles.good), neutral = CleanRole(value.roles.neutral), bad = CleanRole(value.roles.bad)
+            };
+            Roles result = new Roles();
+            string role = CleanRole(value.role);
+            string camp = value.camp == null ? InferRoleCamp(Clean(value.role, 32)) : ValidCamp(value.camp);
+            SetGroupRole(result, camp, role);
+            return result;
+        }
+        public static string GetCamp(Player value)
+        {
+            if (value == null) throw new ArgumentNullException("value");
+            if (value.camp != null) return ValidCamp(value.camp);
+            string role = CleanRole(value.role);
+            if (value.roles == null) return InferRoleCamp(Clean(value.role, 32));
+            // A grouped record is authoritative over the older single role.
+            // Prefer its matching selection, then its first recorded camp.
+            if (role.Length > 0) foreach (string key in RoleKeys)
+                if (GroupRole(value.roles, key) == role) return key;
+            // An unclassified legacy/custom role must not be silently erased
+            // when the old file also contains guesses for other camps.
+            if (role.Length > 0 && InferRoleCamp(role).Length == 0) return "";
+            foreach (string key in RoleKeys) {
+                string stored = key == "good" ? value.roles.good : key == "neutral" ? value.roles.neutral : value.roles.bad;
+                if (Clean(stored, 32).Length > 0) return key;
+            }
+            return "";
+        }
+        public static string GetRole(Player value)
+        {
+            if (value == null) throw new ArgumentNullException("value");
+            string camp = GetCamp(value);
+            if (camp.Length > 0) return value.roles == null ? CleanRole(value.role) : GroupRole(value.roles, camp);
+            string legacy = CleanRole(value.role);
+            // A later catalog may learn a previously unclassified role. Keep
+            // its text without overriding an explicit undetermined camp.
+            if (value.camp != null) return legacy;
+            return InferRoleCamp(legacy).Length == 0 ? legacy : "";
+        }
+        public static void SelectCamp(Player value, string camp)
+        {
+            if (value == null) throw new ArgumentNullException("value");
+            string previousCamp = GetCamp(value), previousRole = GetRole(value);
+            if (value.roles == null) value.roles = CopyRoles(value);
+            value.camp = ValidCamp(camp);
+            // Let a user classify an imported custom role without losing its
+            // text, provided that camp does not already have a saved guess.
+            if (value.camp.Length > 0 && previousCamp.Length == 0 && previousRole.Length > 0
+                && (InferRoleCamp(previousRole).Length == 0 || InferRoleCamp(previousRole) == value.camp)
+                && GroupRole(value.roles, value.camp).Length == 0)
+                SetGroupRole(value.roles, value.camp, previousRole);
+            value.role = GroupRole(value.roles, value.camp);
+        }
+        public static void SelectRole(Player value, string role)
+        {
+            if (value == null) throw new ArgumentNullException("value");
+            string camp = GetCamp(value);
+            string selected = CleanRole(role);
+            if (camp.Length == 0) {
+                if (selected.Length == 0) { value.camp = ""; value.role = ""; }
+                return;
+            }
+            if (value.roles == null) value.roles = CopyRoles(value);
+            value.camp = camp;
+            SetGroupRole(value.roles, camp, selected);
+            value.role = selected;
+        }
         public static AppState CreateState()
         { return new AppState { session = CreateSession(), preferences = new Preferences() }; }
         public static Session CreateSession()
         {
             Session session = new Session();
-            for (int i = 1; i <= PlayerCount; i++) session.players.Add(new Player { id = i, roles = new Roles() });
+            for (int i = 1; i <= PlayerCount; i++) session.players.Add(new Player { id = i, camp = "", roles = new Roles() });
             return session;
         }
         public static Session NormalizeSession(Session raw)
@@ -116,16 +198,14 @@ namespace GgdHelp
                 if (item == null && i < source.Count && source[i] != null && !source[i].hasId) item = source[i];
                 if (item == null) continue;
                 Player target = result.players[i];
-                target.name = Clean(item.name, 32); target.role = Clean(item.role, 32);
+                target.name = Clean(item.name, 32); target.role = CleanRole(item.role);
                 target.notes = Clean(item.notes, 240); target.notes2 = Clean(item.notes2, 240);
-                if (item.roles != null)
-                    target.roles = new Roles { good = Clean(item.roles.good, 32), neutral = Clean(item.roles.neutral, 32), bad = Clean(item.roles.bad, 32) };
-                else
-                    target.roles = new Roles {
-                        good = Array.IndexOf(RoleGroups[0], target.role) >= 0 ? target.role : "",
-                        neutral = Array.IndexOf(RoleGroups[1], target.role) >= 0 ? target.role : "",
-                        bad = Array.IndexOf(RoleGroups[2], target.role) >= 0 ? target.role : ""
-                    };
+                target.camp = GetCamp(item);
+                target.roles = CopyRoles(item);
+                // Resolve from the source before adding camp: an old missing
+                // camp plus cleared grouped roles must still suppress stale
+                // single-role data, unlike an explicit undetermined new record.
+                target.role = GetRole(item);
                 if (item.death != null) target.death = new Death {
                     round = Round(item.death.round, 1), cause = Array.IndexOf(DeathCauses, item.death.cause) >= 0 ? item.death.cause : "不明"
                 };
@@ -248,6 +328,10 @@ namespace GgdHelp
                     double rawId = RawNumber(Get(item, "id"), 0, -1000, 1000);
                     Player p = new Player { id = Math.Floor(rawId) == rawId ? (int)rawId : 0, hasId = item.ContainsKey("id"),
                         name = RawText(item,"name",32), role = RawText(item,"role",32), notes = RawText(item,"notes",240), notes2 = RawText(item,"notes2",240) };
+                    // Preserve the distinction between an old missing/null camp
+                    // and a new explicit empty choice. Invalid types stay unset.
+                    object camp = Get(item, "camp");
+                    p.camp = camp == null ? null : ValidCamp(camp as string);
                     IDictionary<string, object> roles = Get(item,"roles") as IDictionary<string, object>;
                     if (roles != null) p.roles = new Roles { good = RawText(roles,"good",32), neutral = RawText(roles,"neutral",32), bad = RawText(roles,"bad",32) };
                     IDictionary<string, object> death = Get(item,"death") as IDictionary<string, object>;

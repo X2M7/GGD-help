@@ -35,18 +35,6 @@ namespace GgdHelp
         }
     }
 
-    internal sealed class CampLabel : Label
-    {
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            // A native Label adds glyph-overhang padding, which used to clip
-            // these single Chinese characters inside their narrow columns.
-            TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, ForeColor,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
-                TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
-        }
-    }
-
     internal sealed class CardTextBox : TextBox
     {
         private readonly string cue;
@@ -67,8 +55,10 @@ namespace GgdHelp
         private Player player;
         private Preferences preferences;
         private readonly Func<int> currentRound;
-        private readonly Label[] roleLabels = new Label[3];
-        private readonly DarkComboBox[] roles = new DarkComboBox[3];
+        private readonly DarkComboBox camp;
+        private readonly DarkComboBox role;
+        private string displayedCamp;
+        private Player displayedPlayer;
         private readonly TextBox[] notes = new TextBox[2];
         private readonly Button[] deaths = new Button[7];
         private readonly Label deathStatus;
@@ -110,44 +100,24 @@ namespace GgdHelp
             TabStop = false;
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
             tips = new ToolTip();
-            string[] captions = { "好", "中", "坏" };
-            Color[] colors = { CardPalette.Mint, Color.FromArgb(230, 205, 136), CardPalette.Dead };
-            for (int index = 0; index < 3; index++)
+            camp = NewRoleSelector("camp");
+            camp.Items.Add("阵营待定");
+            camp.Items.AddRange(Model.RoleLabels);
+            camp.SelectedIndexChanged += delegate
             {
-                int group = index;
-                Label label = new CampLabel();
-                label.Text = captions[index];
-                label.Name = label.AccessibleName = Name + "-camp-" + Model.RoleKeys[index];
-                label.BackColor = Color.Transparent;
-                label.ForeColor = colors[index];
-                label.TextAlign = ContentAlignment.MiddleLeft;
-                roleLabels[index] = label;
-                Controls.Add(label);
-                DarkComboBox select = new DarkComboBox();
-                select.DropDownStyle = ComboBoxStyle.DropDownList;
-                select.FlatStyle = FlatStyle.Flat;
-                select.BackColor = CardPalette.Input;
-                select.ForeColor = CardPalette.Ink;
-                select.DropDownWidth = 130;
-                select.MaxDropDownItems = 12;
-                select.IntegralHeight = false;
-                select.Items.Add("待定");
-                select.Items.AddRange(Model.RoleGroups[index]);
-                select.Name = Name + "-role-" + Model.RoleKeys[index];
-                select.AccessibleName = select.Name;
-                select.SelectedIndexChanged += delegate
-                {
-                    if (updating || !editing || select.SelectedIndex < 0) return;
-                    string selected = select.SelectedIndex == 0 ? "" : select.SelectedItem.ToString();
-                    if (group == 0) player.roles.good = selected;
-                    else if (group == 1) player.roles.neutral = selected;
-                    else player.roles.bad = selected;
-                    tips.SetToolTip(select, captions[group] + " · " + (selected.Length == 0 ? "身份待定" : selected));
-                    RaiseChanged();
-                };
-                roles[index] = select;
-                Controls.Add(select);
-            }
+                if (updating || !editing || camp.SelectedIndex < 0) return;
+                Model.SelectCamp(player, camp.SelectedIndex == 0 ? "" : Model.RoleKeys[camp.SelectedIndex - 1]);
+                UpdateRoleSelectors();
+                RaiseChanged();
+            };
+            role = NewRoleSelector("role");
+            role.SelectedIndexChanged += delegate
+            {
+                if (updating || !editing || !role.Enabled || role.SelectedIndex < 0) return;
+                Model.SelectRole(player, role.SelectedIndex == 0 ? "" : role.SelectedItem.ToString());
+                UpdateRoleTips();
+                RaiseChanged();
+            };
             for (int index = 0; index < 2; index++)
             {
                 int field = index;
@@ -266,6 +236,55 @@ namespace GgdHelp
             return label;
         }
 
+        private DarkComboBox NewRoleSelector(string suffix)
+        {
+            DarkComboBox select = new DarkComboBox();
+            select.BackColor = CardPalette.Input;
+            select.ForeColor = CardPalette.Ink;
+            select.Name = select.AccessibleName = Name + "-" + suffix;
+            Controls.Add(select);
+            return select;
+        }
+
+        private void UpdateRoleSelectors()
+        {
+            bool previous = updating;
+            updating = true;
+            try {
+                string selectedCamp = Model.GetCamp(player);
+                int group = Array.IndexOf(Model.RoleKeys, selectedCamp);
+                camp.SelectedIndex = group + 1;
+                if (!Object.ReferenceEquals(displayedPlayer, player) || displayedCamp != selectedCamp || role.Items.Count == 0) {
+                    role.BeginUpdate();
+                    try {
+                        role.Items.Clear();
+                        role.Items.Add("身份待定");
+                        if (group >= 0) role.Items.AddRange(Model.RoleGroups[group]);
+                        displayedCamp = selectedCamp;
+                        displayedPlayer = player;
+                    } finally { role.EndUpdate(); }
+                }
+                string choice = Model.GetRole(player);
+                // Retain imported guesses even when a role was renamed or is
+                // absent from the current catalogue; never put it in other camps.
+                if (choice.Length != 0 && !role.Items.Contains(choice)) role.Items.Add(choice);
+                role.SelectedIndex = choice.Length == 0 ? 0 : role.Items.IndexOf(choice);
+                role.Enabled = editing && group >= 0;
+                camp.ForeColor = group == 0 ? CardPalette.Mint : group == 1 ? Color.FromArgb(230, 205, 136)
+                    : group == 2 ? CardPalette.Dead : CardPalette.Muted;
+                UpdateRoleTips();
+            } finally { updating = previous; }
+        }
+
+        private void UpdateRoleTips()
+        {
+            int group = Array.IndexOf(Model.RoleKeys, Model.GetCamp(player));
+            string choice = Model.GetRole(player);
+            tips.SetToolTip(camp, "先选择阵营：好 / 中 / 坏");
+            tips.SetToolTip(role, group < 0 ? (choice.Length == 0 ? "先选择左侧阵营，再选择具体身份" : "旧身份：" + choice + " · 先选择阵营")
+                : Model.RoleLabels[group] + " · " + (choice.Length == 0 ? "身份待定" : choice));
+        }
+
         private void RaiseChanged()
         {
             Action callback = Changed;
@@ -284,7 +303,6 @@ namespace GgdHelp
         {
             if (value == null) throw new ArgumentNullException("value");
             if (options == null) throw new ArgumentNullException("options");
-            if (value.roles == null) value.roles = new Roles();
             if (options.features == null) options.features = new Features();
             if (player.id != value.id || lastRound != currentRound()) draftDeathRound = null;
             lastRound = currentRound();
@@ -297,15 +315,7 @@ namespace GgdHelp
             try
             {
                 ApplyScale(Math.Max(0.55, Math.Min(3.5, scale)));
-                string[] selected = { value.roles.good, value.roles.neutral, value.roles.bad };
-                for (int index = 0; index < roles.Length; index++)
-                {
-                    string choice = selected[index] ?? "";
-                    if (choice.Length != 0 && !roles[index].Items.Contains(choice)) roles[index].Items.Add(choice);
-                    int selectedIndex = choice.Length == 0 ? 0 : roles[index].Items.IndexOf(choice);
-                    if (roles[index].SelectedIndex != selectedIndex) roles[index].SelectedIndex = selectedIndex;
-                    tips.SetToolTip(roles[index], Model.RoleLabels[index] + " · " + (choice.Length == 0 ? "身份待定" : choice));
-                }
+                UpdateRoleSelectors();
                 if (notes[0].Text != value.notes) notes[0].Text = value.notes ?? "";
                 if (notes[1].Text != value.notes2) notes[1].Text = value.notes2 ?? "";
                 UpdateDeath();
@@ -339,12 +349,13 @@ namespace GgdHelp
             roundSuffix.Font = smallFont;
             revive.Font = smallFont;
             deathRound.Font = numberFont;
-            foreach (DarkComboBox select in roles)
+            foreach (DarkComboBox select in new[] { camp, role })
             {
                 select.ApplyScale(scale, 26);
-                select.DropDownWidth = Px(130);
                 select.DropDownHeight = Px(240);
             }
+            camp.DropDownWidth = Px(88);
+            role.DropDownWidth = Px(210);
             deathRound.ApplyScale(scale, 26);
             if (oldNormal != null && !Object.ReferenceEquals(oldNormal, normalFont)) oldNormal.Dispose();
             if (oldSmall != null && !Object.ReferenceEquals(oldSmall, smallFont)) oldSmall.Dispose();
@@ -368,16 +379,11 @@ namespace GgdHelp
             Visible = HasVisibleContent && player.id <= preferences.playerCount;
             int y = Px(7), gap = Px(5);
             int roleHeight = Px(26);
-            foreach (DarkComboBox select in roles) roleHeight = Math.Max(roleHeight, select.Height);
-            for (int index = 0; index < 3; index++)
-            {
-                roleLabels[index].Visible = feature.roles;
-                roles[index].Visible = feature.roles;
-                if (feature.roles)
-                {
-                    PlaceInRow(roleLabels[index], 8 + index * 96, y, 18, roleHeight);
-                    PlaceInRow(roles[index], 28 + index * 96, y, 72, roleHeight);
-                }
+            roleHeight = Math.Max(roleHeight, Math.Max(camp.Height, role.Height));
+            camp.Visible = role.Visible = feature.roles;
+            if (feature.roles) {
+                PlaceInRow(camp, 8, y, 88, roleHeight);
+                PlaceInRow(role, 102, y, 190, roleHeight);
             }
             if (feature.roles) y += roleHeight + gap;
             int noteHeight = Math.Max(Px(26), normalFont.Height + Px(4));
@@ -440,7 +446,8 @@ namespace GgdHelp
         public void SetEditing(bool value)
         {
             editing = value;
-            foreach (ComboBox select in roles) select.Enabled = value;
+            camp.Enabled = value;
+            role.Enabled = value && Array.IndexOf(Model.RoleKeys, Model.GetCamp(player)) >= 0;
             foreach (TextBox input in notes) { input.ReadOnly = !value; input.TabStop = value; }
             foreach (Button button in deaths) button.Enabled = value;
             deathRound.Enabled = value;
