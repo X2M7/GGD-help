@@ -108,12 +108,15 @@ namespace GgdHelp
             // NOACTIVATE alone does not revoke an existing keyboard focus. Hiding
             // the focused HWND first lets Windows return focus to the game.
             if (enabled && hadFocus) form.Hide();
-            long style = GetExtendedStyle(handle) | WS_EX_LAYERED;
+            long previousStyle = GetExtendedStyle(handle);
+            long style = previousStyle | WS_EX_LAYERED;
             if (enabled) style |= WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
             else style &= ~(long)(WS_EX_TRANSPARENT | WS_EX_NOACTIVATE);
-            SetExtendedStyle(handle, style);
-            SetWindowPos(handle, HwndTopmost, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            if (style != previousStyle) {
+                SetExtendedStyle(handle, style);
+                SetWindowPos(handle, HwndTopmost, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            }
             if (enabled && hadFocus)
             {
                 if (wasVisible) ShowInactive(form);
@@ -209,6 +212,9 @@ namespace GgdHelp
 
         private static void SetExtendedStyle(IntPtr handle, long style)
         {
+            // Reapplying an unchanged layered style needlessly invalidates
+            // native surfaces on some Windows display drivers.
+            if (GetExtendedStyle(handle) == style) return;
             if (IntPtr.Size == 8) SetWindowLongPtr(handle, GWL_EXSTYLE, new IntPtr(style));
             else SetWindowLong(handle, GWL_EXSTYLE, unchecked((int)style));
         }

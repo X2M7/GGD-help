@@ -11,14 +11,14 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("X2M7")]
 [assembly: AssemblyProduct("GGD-help")]
 [assembly: AssemblyCopyright("Based on snapea/goose-duck-help")]
-[assembly: AssemblyVersion("0.2.3.0")]
-[assembly: AssemblyFileVersion("0.2.3.0")]
+[assembly: AssemblyVersion("0.2.4.0")]
+[assembly: AssemblyFileVersion("0.2.4.0")]
 
 namespace GgdHelp
 {
     internal static class Program
     {
-        public const string Version = "0.2.3";
+        public const string Version = "0.2.4";
         [STAThread]
         private static void Main(string[] args)
         {

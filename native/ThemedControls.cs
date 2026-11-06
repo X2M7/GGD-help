@@ -32,6 +32,61 @@ namespace GgdHelp
             if (rectangle.Width < 2 || rectangle.Height < 2) return;
             using (Pen pen = new Pen(color)) graphics.DrawRectangle(pen, rectangle.X, rectangle.Y, rectangle.Width - 1, rectangle.Height - 1);
         }
+
+        // Publish a complete dark surface within the window's paint transaction.
+        // Drawing over the system theme with GetDC after EndPaint briefly exposes
+        // white arrows and can miss the layered window's redirected paint surface.
+        internal static bool Paint(Control control, ref Message message, Action<Graphics> draw)
+        {
+            if (message.Msg == 0x0014) { // WM_ERASEBKGND: the buffer fills every pixel.
+                message.Result = new IntPtr(1);
+                return true;
+            }
+            if (message.Msg == 0x000F) { // WM_PAINT
+                PaintStruct paint;
+                IntPtr dc = BeginPaint(control.Handle, out paint);
+                try {
+                    if (dc != IntPtr.Zero) PaintBuffer(dc, control.ClientRectangle, draw);
+                } finally { EndPaint(control.Handle, ref paint); }
+                message.Result = IntPtr.Zero;
+                return true;
+            }
+            if (message.Msg == 0x0317 || message.Msg == 0x0318) { // WM_PRINT / WM_PRINTCLIENT
+                long flags = message.LParam.ToInt64();
+                bool visible = (flags & 1) == 0 || control.Visible; // PRF_CHECKVISIBLE
+                bool client = message.Msg == 0x0318 || (flags & 4) != 0; // PRF_CLIENT
+                if (visible && client && message.WParam != IntPtr.Zero)
+                    PaintBuffer(message.WParam, control.ClientRectangle, draw);
+                message.Result = IntPtr.Zero;
+                return true;
+            }
+            return false;
+        }
+
+        private static void PaintBuffer(IntPtr dc, Rectangle bounds, Action<Graphics> draw)
+        {
+            if (bounds.Width <= 0 || bounds.Height <= 0) return;
+            using (Graphics target = Graphics.FromHdc(dc))
+            using (BufferedGraphics buffer = BufferedGraphicsManager.Current.Allocate(target, bounds)) {
+                draw(buffer.Graphics);
+                buffer.Render(target);
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PaintStruct
+        {
+            public IntPtr Dc;
+            public int Erase;
+            public int Left, Top, Right, Bottom;
+            public int Restore, IncUpdate;
+            // PAINTSTRUCT reserves exactly 32 bytes after its BOOL fields.
+            public int Reserved0, Reserved1, Reserved2, Reserved3;
+            public int Reserved4, Reserved5, Reserved6, Reserved7;
+        }
+
+        [DllImport("user32.dll")] private static extern IntPtr BeginPaint(IntPtr window, out PaintStruct paint);
+        [DllImport("user32.dll")] private static extern bool EndPaint(IntPtr window, ref PaintStruct paint);
     }
 
     internal sealed class DarkComboBox : ComboBox
@@ -95,9 +150,9 @@ namespace GgdHelp
         private void DrawCollapsed(Graphics graphics)
         {
             Rectangle client = ClientRectangle;
+            using (Brush brush = new SolidBrush(BackColor)) graphics.FillRectangle(brush, client);
             if (client.Width < 2 || client.Height < 2) return;
             bool active = Enabled && (hover || Focused || DroppedDown);
-            using (Brush brush = new SolidBrush(BackColor)) graphics.FillRectangle(brush, client);
             int arrowWidth = Math.Max(8, (int)Math.Round(18 * scale));
             Rectangle arrow = new Rectangle(Math.Max(1, client.Right - arrowWidth), 1, Math.Min(client.Width - 2, arrowWidth - 1), client.Height - 2);
             using (Brush brush = new SolidBrush(active ? SelectorDrawing.Hover : BackColor)) graphics.FillRectangle(brush, arrow);
@@ -113,14 +168,8 @@ namespace GgdHelp
 
         protected override void WndProc(ref Message message)
         {
+            if (SelectorDrawing.Paint(this, ref message, DrawCollapsed)) return;
             base.WndProc(ref message);
-            // Painting after native processing also covers its system-themed
-            // arrow. PRINTCLIENT is used by DrawToBitmap and accessibility tools.
-            if (message.Msg == 0x000F && IsHandleCreated) {
-                using (Graphics graphics = Graphics.FromHwnd(Handle)) DrawCollapsed(graphics);
-            } else if ((message.Msg == 0x0318 || message.Msg == 0x0317) && message.WParam != IntPtr.Zero) {
-                using (Graphics graphics = Graphics.FromHdc(message.WParam)) DrawCollapsed(graphics);
-            }
         }
 
         protected override void OnMouseEnter(EventArgs e) { hover = true; base.OnMouseEnter(e); Invalidate(); }
@@ -239,7 +288,11 @@ namespace GgdHelp
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            base.OnPaint(e);
+            // UpDownBase is Opaque and only paints its system border. With a
+            // buffered custom layout, untouched padding can otherwise contain
+            // pixels left by an earlier control (visible as stray white strokes).
+            // Fill every pixel ourselves and replace the system border as well.
+            using (Brush brush = new SolidBrush(BackColor)) e.Graphics.FillRectangle(brush, ClientRectangle);
             SelectorDrawing.Border(e.Graphics, ClientRectangle, Enabled && (hover || ContainsFocus) ? CardPalette.Mint : CardPalette.Border);
         }
 
@@ -293,12 +346,8 @@ namespace GgdHelp
 
             protected override void WndProc(ref Message message)
             {
+                if (SelectorDrawing.Paint(child, ref message, Draw)) return;
                 base.WndProc(ref message);
-                if (message.Msg == 0x000F && child.IsHandleCreated) {
-                    using (Graphics graphics = Graphics.FromHwnd(child.Handle)) Draw(graphics);
-                } else if ((message.Msg == 0x0318 || message.Msg == 0x0317) && message.WParam != IntPtr.Zero) {
-                    using (Graphics graphics = Graphics.FromHdc(message.WParam)) Draw(graphics);
-                }
             }
         }
     }

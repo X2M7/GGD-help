@@ -25,7 +25,6 @@ namespace GgdHelp
         private readonly List<PlayerCard> cards = new List<PlayerCard>();
         private readonly System.Windows.Forms.Timer saveTimer;
         private readonly System.Windows.Forms.Timer restoreTimer;
-        private readonly System.Windows.Forms.Timer repaintTimer;
         private FlowLayoutPanel toolbar;
         private DarkNumericUpDown round;
         private Label summary;
@@ -41,17 +40,16 @@ namespace GgdHelp
             string startupMessage = StateStore.LastMessage;
             if (StateStore.LoadFailed && MessageBox.Show(startupMessage + "\r\n\r\n继续以空白记录启动？原始数据不会修改。\r\n选择“否”退出，先关闭旧版或修复记录后再启动。", "旧记录读取失败", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
                 throw new OperationCanceledException("已取消启动，原始记录保持不变。");
-            overlay = new OverlayForm { Opacity = 0.90 }; background = new CardBackgroundForm(); launcher = new LauncherForm();
+            background = new CardBackgroundForm();
+            // Keep native text and input controls on a color-key-only surface.
+            // Windows guarantees owned windows stay above their owner, even
+            // when activation or monitor changes reorder the topmost windows.
+            overlay = new OverlayForm { Owner = background };
+            launcher = new LauncherForm();
             saveTimer = new System.Windows.Forms.Timer { Interval = 250 };
             saveTimer.Tick += delegate { SaveNow(); };
             restoreTimer = new System.Windows.Forms.Timer { Interval = 250 };
             restoreTimer.Tick += delegate { if (restoreEvent.WaitOne(0)) Restore(); };
-            repaintTimer = new System.Windows.Forms.Timer { Interval = 80 };
-            repaintTimer.Tick += delegate {
-                repaintTimer.Stop();
-                if (!exiting && visible) { background.Refresh(); overlay.Refresh(); }
-                if (!exiting) launcher.Refresh();
-            };
             launcher.ToggleRequested += delegate { SetVisible(!visible); };
             launcher.LockRequested += delegate { SetLocked(!locked); };
             launcher.MenuRequested += ShowMenu;
@@ -196,9 +194,9 @@ namespace GgdHelp
             background.UpdateCards(rectangles, state.preferences.opacity);
             if (toolbar != null) toolbar.BringToFront();
             UpdateSummary();
-            // Updating layered window attributes can invalidate their cached
-            // child surfaces without triggering a WinForms paint for each child.
-            if (overlay.Visible) overlay.Refresh();
+            // Coalesce layout invalidations instead of synchronously erasing
+            // and repainting every native child on each drag event.
+            if (overlay.Visible) overlay.Invalidate(true);
         }
         private void ChangeRound(int value)
         {
@@ -276,9 +274,6 @@ namespace GgdHelp
             // particular, the first show must render untouched toolbar controls.
             if (visible) { background.Refresh(); overlay.Refresh(); }
             launcher.Refresh();
-            // The first layered surface may not exist until after ShowWindow
-            // returns to the message loop. Repaint once after it is composited.
-            repaintTimer.Stop(); repaintTimer.Start();
         }
         private void UpdateLauncher()
         {
@@ -381,15 +376,15 @@ namespace GgdHelp
         private void Quit()
         {
             if (exiting) return; exiting = true; SaveNow();
-            restoreTimer.Stop(); saveTimer.Stop(); repaintTimer.Stop();
+            restoreTimer.Stop(); saveTimer.Stop();
             SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
             NativeWindows.UnregisterHotKey(overlay.Handle, 1); NativeWindows.UnregisterHotKey(overlay.Handle, 2);
             tray.Visible = false;
             ContextMenuStrip trayMenu = tray.ContextMenuStrip;
             tray.ContextMenuStrip = null; tray.Dispose();
             trayMenu.Dispose(); launcherMenu.Dispose();
-            if (settings != null) settings.Dispose(); launcher.Dispose(); background.Dispose(); overlay.Exiting = true; overlay.Dispose();
-            saveTimer.Dispose(); restoreTimer.Dispose(); repaintTimer.Dispose(); if (toolbarFont != null) toolbarFont.Dispose(); ExitThread();
+            if (settings != null) settings.Dispose(); launcher.Dispose(); overlay.Exiting = true; overlay.Dispose(); background.Dispose();
+            saveTimer.Dispose(); restoreTimer.Dispose(); if (toolbarFont != null) toolbarFont.Dispose(); ExitThread();
         }
         protected override void ExitThreadCore()
         {

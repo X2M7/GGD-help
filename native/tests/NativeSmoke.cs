@@ -43,6 +43,7 @@ internal static class NativeSmoke
     private static string executable, artifactDirectory, profile, copiedExecutable;
     private static IntPtr overlayWindow;
     private static Rectangle displayBounds;
+    private static List<Rectangle> lastBlankAreas;
     private static int exitCode = 1;
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
 
@@ -87,6 +88,7 @@ internal static class NativeSmoke
             for (int launch = 0; launch < 2; launch++) { StopApp(); StartApp(); }
             VerifyRoleSelectors();
             VerifySelectorAppearance();
+            VerifyLayerOrder();
             VerifyNumericSelectors();
             Step("toolbar, roles and Unicode notes");
             Click("round-next");
@@ -157,6 +159,8 @@ internal static class NativeSmoke
                 Wait(delegate { return !Visible(control); }, feature + " controls disappear");
                 if (feature == "roles") Check(!Visible("player-1-camp"), "feature switch hides both linked selectors");
             }
+            Check(!Visible("player-1") && !Visible("player-16"), "all feature groups off remove the empty cards");
+            CheckToolbarPainted();
             SetChecked("feature-roles", true);
             SetChecked("feature-notes", true);
             SetChecked("feature-death", true);
@@ -164,6 +168,8 @@ internal static class NativeSmoke
             Wait(delegate { return Visible("player-1-notes-1"); }, "notes return after enabling their group");
             Check(Value("player-1-notes-1") == "中文记录一 · native smoke", "notes survive hiding");
             Check(Json.Serialize(Player()["roles"]) == expectedRoles, "role choices survive hiding");
+            CheckCardTextPainted("feature groups restored", true);
+            VerifyBackplateOpacity();
 
             Step("transparent nickname strip sends clicks to controlled window");
             AutomationElement card = Find("player-1", true);
@@ -178,9 +184,10 @@ internal static class NativeSmoke
             Step("lock releases focus and launcher can restore editing");
             Click("player-1-notes-1");
             EnsureAppForeground();
-            Click("lock-button");
+            MonitorBlankAreas(delegate { Click("lock-button"); }, "locking");
             Wait(delegate { return (ExtendedStyle(overlayWindow) & 0x20L) != 0; }, "locked window uses native pass-through style");
             Wait(delegate { return WindowProcess(GetForegroundWindow()) != running.Id; }, "locking releases keyboard focus");
+            CheckCardTextPainted("locked", true);
             AutomationElement notes = Find("player-1-notes-1", true);
             System.Windows.Rect noteRect = notes.Current.BoundingRectangle;
             clicksBefore = backdrop.ClickCount;
@@ -190,14 +197,16 @@ internal static class NativeSmoke
             int keysBefore = backdrop.KeyCount;
             SendUnicode("k");
             Wait(delegate { return backdrop.KeyCount > keysBefore; }, "locked overlay does not swallow game-window keyboard input");
-            Click("launcher-lock");
+            MonitorBlankAreas(delegate { Click("launcher-lock"); }, "unlocking");
             Wait(delegate { return (ExtendedStyle(overlayWindow) & 0x20L) == 0; }, "launcher restores editing");
+            CheckCardTextPainted("unlocked", true);
 
             Step("hide and restore from separate launcher");
-            Click("hide-button");
+            MonitorBlankAreas(delegate { Click("hide-button"); }, "hiding");
             Wait(delegate { return !IsWindowVisible(overlayWindow); }, "overlay hides");
-            Click("launcher-toggle");
+            MonitorBlankAreas(delegate { Click("launcher-toggle"); }, "restoring");
             Wait(delegate { return IsWindowVisible(overlayWindow) && Visible("round-next"); }, "launcher shows overlay again");
+            CheckCardTextPainted("shown again", true);
 
             Step("global show and click-through shortcuts");
             Shortcut(Keys.G);
@@ -208,6 +217,7 @@ internal static class NativeSmoke
             Wait(delegate { return (ExtendedStyle(overlayWindow) & 0x20L) != 0; }, "Ctrl+Shift+L enables pass-through");
             Shortcut(Keys.L);
             Wait(delegate { return (ExtendedStyle(overlayWindow) & 0x20L) == 0; }, "Ctrl+Shift+L restores editing");
+            CheckCardTextPainted("shortcuts restored", true);
 
             VerifyLauncherMenuLifecycle();
 
@@ -220,6 +230,8 @@ internal static class NativeSmoke
             Drag(Center(Find("player-1-drag", true).Current.BoundingRectangle), new Point(42, 22));
             Wait(delegate { return Math.Abs(Find("player-1", true).Current.BoundingRectangle.Left - beforeDrag.Left - 42) < 3
                 && Math.Abs(Find("player-1", true).Current.BoundingRectangle.Top - beforeDrag.Top - 22) < 3; }, "card follows physical mouse drag");
+            CheckCardTextPainted("card dragged", true);
+            MonitorBlankAreas(delegate { Thread.Sleep(300); }, "after dragging");
             string expectedProfiles = null;
             Wait(delegate { expectedProfiles = Json.Serialize(State()["profiles"]); return expectedProfiles.Contains("positions"); }, "calibrated position is saved");
             ChooseLauncherMenuItem("位置 / 设置");
@@ -264,9 +276,10 @@ internal static class NativeSmoke
             SetCursorPos(displayBounds.Left + displayBounds.Width / 2, displayBounds.Bottom - 8);
             Thread.Sleep(350);
             CheckToolbarPainted();
+            CheckCardTextPainted("saved session restored", true);
             Capture("native-smoke-restart.png");
             StopApp(true);
-            Console.WriteLine("PASS: standalone native exe; dark translucent selectors, mouse dropdown choice, numeric arrows and limits, Unicode text, roles, death/revival, feature switches, click-through, focus release, hotkeys, launcher menu actions and exit, card/launcher dragging and restart persistence.");
+            Console.WriteLine("PASS: standalone native exe; visible card text, owned foreground z-order, translucent backplates, no sampled white flashes, dark native selectors, mouse dropdown choice, numeric arrows and limits, Unicode text, roles, death/revival, feature switches, click-through, focus release, hotkeys, launcher menu actions and exit, card/launcher dragging and restart persistence.");
             Console.WriteLine("Host: " + Environment.OSVersion + "; this result does not claim Windows 10 or a real game was tested.");
             exitCode = 0;
         }
@@ -316,9 +329,13 @@ internal static class NativeSmoke
         bool hasAlpha = GetLayeredWindowAttributes(overlayWindow, out colorKey, out alpha, out alphaFlags);
         Console.WriteLine("Overlay display: visible=" + IsWindowVisible(overlayWindow) + ", alpha=" + (hasAlpha ? alpha.ToString() : "unknown")
             + ", flags=" + alphaFlags + ", style=" + ExtendedStyle(overlayWindow).ToString("X"));
+        Check(hasAlpha && (alphaFlags & 1) != 0 && ((alphaFlags & 2) == 0 || alpha == 255),
+            "native text layer uses color-key transparency without global alpha attenuation");
         Thread.Sleep(250);
         Capture("native-smoke-start.png");
         CheckToolbarPainted();
+        CheckCardTextPainted("startup", false);
+        MonitorBlankAreas(delegate { Thread.Sleep(300); }, "startup settling");
     }
 
     private static void CheckToolbarPainted()
@@ -328,9 +345,8 @@ internal static class NativeSmoke
             foreach (AutomationElement element in toolbar.FindAll(TreeScope.Descendants,
                 new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text)))
                 if (element.Current.Name.StartsWith("GGD-help", StringComparison.Ordinal)) { brand = element; break; }
-            Color surface = Color.FromArgb(42, 54, 64);
-            return brand != null && HasPaintedColor(brand, Blend(Color.FromArgb(142, 226, 195), surface, .90), 8)
-                && HasPaintedColor(Find("round-next", true), Blend(Color.FromArgb(37, 55, 67), surface, .90), 30);
+            return brand != null && HasPaintedColor(brand, Color.FromArgb(142, 226, 195), 8)
+                && HasPaintedColor(Find("round-next", true), Color.FromArgb(37, 55, 67), 30);
         }, "toolbar brand text and round button are visibly painted");
     }
 
@@ -350,6 +366,167 @@ internal static class NativeSmoke
         return false;
     }
 
+    private static void CheckCardTextPainted(string phase, bool includeNotes)
+    {
+        // UIA can report valid text and controls even when the composed window
+        // is only an empty mask. Inspect the physical glyph pixels as well.
+        foreach (int player in new[] { 1, 16 }) {
+            foreach (string suffix in new[] { "camp", "role", "death-status" }) {
+                string id = "player-" + player + "-" + suffix;
+                Wait(delegate { return HasGlyphPixels(Find(id, true), suffix != "death-status"); },
+                    phase + ": visible glyphs inside " + id);
+            }
+        }
+        if (includeNotes) foreach (int note in new[] { 1, 2 }) {
+            string id = "player-1-notes-" + note;
+            Wait(delegate { return HasGlyphPixels(Find(id, true), false); }, phase + ": visible Unicode note " + note);
+        }
+    }
+
+    private static bool HasGlyphPixels(AutomationElement element, bool selector)
+    {
+        System.Windows.Rect bounds = element.Current.BoundingRectangle;
+        if (bounds.IsEmpty || bounds.Width < 10 || bounds.Height < 7) return false;
+        int left = (int)Math.Ceiling(bounds.Left) + 3, top = (int)Math.Ceiling(bounds.Top) + 3;
+        int right = (int)Math.Floor(bounds.Right) - 3, bottom = (int)Math.Floor(bounds.Bottom) - 3;
+        if (selector) right -= (int)Math.Max(10, bounds.Height * .75);
+        Rectangle area = Rectangle.FromLTRB(left, top, right, bottom);
+        if (area.Width <= 0 || area.Height <= 0 || !displayBounds.Contains(area)) return false;
+        using (Bitmap pixels = new Bitmap(area.Width, area.Height))
+        using (Graphics graphics = Graphics.FromImage(pixels)) {
+            graphics.CopyFromScreen(area.Location, Point.Empty, area.Size);
+            int ink = 0;
+            HashSet<int> columns = new HashSet<int>(), rows = new HashSet<int>();
+            for (int y = 0; y < pixels.Height; y++) for (int x = 0; x < pixels.Width; x++) {
+                Color color = pixels.GetPixel(x, y);
+                // Disabled text remains gray. Borders and dark surfaces are
+                // excluded by the inset and intensity threshold; requiring
+                // several columns also prevents a blinking caret from passing.
+                if (color.R > 105 && color.G > 105 && color.B > 105) {
+                    ink++; columns.Add(x); rows.Add(y);
+                }
+            }
+            return ink >= 4 && columns.Count >= 3 && rows.Count >= 2;
+        }
+    }
+
+    private static void VerifyLayerOrder()
+    {
+        Step("owned foreground stays above the translucent backplate when it is raised");
+        IntPtr background = new IntPtr(Find("card-background", true).Current.NativeWindowHandle);
+        Check(background != IntPtr.Zero && WindowProcess(background) == running.Id, "backplate belongs to this test application");
+        uint colorKey, flags; byte alpha;
+        Check(GetLayeredWindowAttributes(background, out colorKey, out alpha, out flags)
+            && flags == 2 && alpha > 0 && alpha < 255, "backplate uses alpha only, with no color-key raster surface");
+        Check(GetWindow(overlayWindow, 4) == background, "foreground has the backplate as its native owner");
+        Check(IsAbove(overlayWindow, background), "foreground starts above the backplate");
+        // Simulate a compositor/display reordering event directly. Separate
+        // unrelated topmost windows can otherwise cover the text after startup.
+        Check(SetWindowPos(background, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010),
+            "controlled backplate can be raised without activation");
+        Wait(delegate { return IsAbove(overlayWindow, background); }, "ownership preserves foreground z-order after the backplate is raised");
+        CheckCardTextPainted("backplate raised", false);
+        CheckToolbarPainted();
+    }
+
+    private static void VerifyBackplateOpacity()
+    {
+        Step("foreground text remains readable at minimum and maximum backplate opacity");
+        int original = Convert.ToInt32(Object(State()["preferences"])["opacity"]);
+        foreach (int value in new[] { 15, 95, original }) {
+            Click("settings-toggle");
+            AutomationElement slider = Find("panel-opacity", true);
+            // The MSAA RangeValue provider can change the native track position
+            // without sending the WinForms notification that updates the model.
+            // Focus our own slider and use the same keys a user would press.
+            slider.SetFocus();
+            EnsureAppForeground();
+            Wait(delegate { return Find("panel-opacity", true).Current.HasKeyboardFocus; }, "opacity slider has keyboard focus");
+            PressKey(value <= 55 ? Keys.Home : Keys.End);
+            int steps = value <= 55 ? value - 15 : 95 - value;
+            for (int step = 0; step < steps; step++) PressKey(value <= 55 ? Keys.Right : Keys.Left);
+            int selected = value;
+            Wait(delegate { return Convert.ToInt32(Object(State()["preferences"])["opacity"]) == selected; },
+                "backplate opacity saved at " + value);
+            // Focusing the slider may scroll this small settings window down.
+            // Bring the existing Close button back into view before clicking.
+            Find("settings-close", true).SetFocus();
+            Click("settings-close");
+            IntPtr background = new IntPtr(Find("card-background", true).Current.NativeWindowHandle);
+            uint key, flags; byte alpha;
+            Check(GetLayeredWindowAttributes(background, out key, out alpha, out flags) && flags == 2
+                && Math.Abs(alpha - 255 * value / 100.0) <= 1, "compositor applies requested backplate alpha " + value);
+            CheckCardTextPainted("backplate opacity " + value, true);
+            CheckToolbarPainted();
+        }
+    }
+
+    private static bool IsAbove(IntPtr foreground, IntPtr background)
+    {
+        IntPtr current = background;
+        for (int limit = 0; limit < 1000; limit++) {
+            current = GetWindow(current, 3); // GW_HWNDPREV follows the Z order.
+            if (current == foreground) return true;
+            if (current == IntPtr.Zero) return false;
+        }
+        return false;
+    }
+
+    private static void MonitorBlankAreas(Action transition, string phase)
+    {
+        // These narrow strips have no controls, text or cursor: white pixels
+        // here are paint artifacts, not legitimate glyphs or popup scrollbars.
+        if (IsWindowVisible(overlayWindow)) {
+            List<Rectangle> areas = new List<Rectangle>();
+            foreach (int player in new[] { 1, 16 }) {
+                System.Windows.Rect card = Find("player-" + player, true).Current.BoundingRectangle;
+                double scale = card.Width / 300.0;
+                areas.Add(new Rectangle((int)card.Left + 2, (int)card.Top + 4, 2, Math.Max(1, (int)card.Height - 8)));
+                areas.Add(new Rectangle((int)(card.Left + card.Width / 2), (int)(card.Top - 14 * scale), 3, 3));
+            }
+            foreach (Rectangle area in areas) Check(displayBounds.Contains(area), "artifact sample stays inside controlled display");
+            lastBlankAreas = areas;
+        }
+        Check(lastBlankAreas != null, "blank sample bounds are available before hiding");
+        List<Rectangle> sampleAreas = new List<Rectangle>(lastBlankAreas);
+        Exception samplingError = null;
+        int frames = 0, whitePixels = 0;
+        using (ManualResetEvent stop = new ManualResetEvent(false))
+        using (ManualResetEvent ready = new ManualResetEvent(false)) {
+            Thread sampler = new Thread(delegate() {
+                try {
+                    while (!stop.WaitOne(0)) {
+                        foreach (Rectangle area in sampleAreas)
+                            using (Bitmap pixels = new Bitmap(area.Width, area.Height))
+                            using (Graphics graphics = Graphics.FromImage(pixels)) {
+                                graphics.CopyFromScreen(area.Location, Point.Empty, area.Size);
+                                for (int y = 0; y < pixels.Height; y++) for (int x = 0; x < pixels.Width; x++) {
+                                    Color color = pixels.GetPixel(x, y);
+                                    if (color.R > 130 && color.G > 130 && color.B > 130) whitePixels++;
+                                }
+                            }
+                        frames++;
+                        ready.Set();
+                        stop.WaitOne(8);
+                    }
+                } catch (Exception error) { samplingError = error; ready.Set(); }
+            });
+            sampler.IsBackground = true;
+            sampler.Start();
+            try {
+                Check(ready.WaitOne(3000), "artifact sampler starts before " + phase);
+                transition();
+                Thread.Sleep(80);
+            } finally {
+                stop.Set();
+                Check(sampler.Join(5000), "artifact sampler finishes after " + phase);
+            }
+        }
+        if (samplingError != null) throw new InvalidOperationException("Screen sampling failed during " + phase, samplingError);
+        Check(frames >= 3 && whitePixels == 0, phase + ": no white flashes in empty card/nickname strips ("
+            + frames + " frames, " + whitePixels + " bright pixels)");
+    }
+
     private static Color Blend(Color foreground, Color background, double opacity)
     {
         return Color.FromArgb((int)Math.Round(foreground.R * opacity + background.R * (1 - opacity)),
@@ -365,18 +542,23 @@ internal static class NativeSmoke
 
     private static void VerifySelectorAppearance()
     {
-        Step("dark selector arrows and real foreground transparency");
+        Step("opaque readable native controls above a live translucent backplate");
         foreach (string id in new[] { "round-input", "player-1-camp", "player-1-role", "player-1-death-round" })
             CheckDarkArrow(id);
         System.Windows.Rect bounds = Find("player-1-camp", true).Current.BoundingRectangle;
         // Near the lower left corner, away from text, arrows, borders and focus cues.
         Point sample = new Point((int)(bounds.Left + bounds.Width * .25), (int)(bounds.Bottom - Math.Max(3, bounds.Height * .18)));
         Color before = Pixel(sample);
+        System.Windows.Rect card = Find("player-1", true).Current.BoundingRectangle;
+        Point plateSample = new Point((int)card.Left + 3, (int)(card.Top + card.Height / 2));
+        Color plateBefore = Pixel(plateSample);
         backdrop.Invoke(new Action(delegate { backdrop.BackColor = Color.FromArgb(230, 184, 140); backdrop.Refresh(); }));
         Thread.Sleep(350);
         Color after = Pixel(sample);
-        Check(after.R - before.R >= 3 && after.G - before.G >= 2,
-            "selector surface shows the live controlled backdrop through alpha (" + before + " -> " + after + ")");
+        Color plateAfter = Pixel(plateSample);
+        Check(CloseColor(before, after, 2), "native selector contrast stays stable when the scene changes");
+        Check(plateAfter.R - plateBefore.R >= 25 && plateAfter.G - plateBefore.G >= 20,
+            "card backplate shows the live controlled backdrop through alpha (" + plateBefore + " -> " + plateAfter + ")");
         Capture("native-selectors-transparency.png");
         backdrop.Invoke(new Action(delegate { backdrop.BackColor = Color.FromArgb(42, 54, 64); backdrop.Refresh(); }));
         Thread.Sleep(350);
@@ -831,6 +1013,8 @@ internal static class NativeSmoke
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr window, uint flags);
+    [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out RECT rectangle);
     [DllImport("user32.dll")] private static extern bool GetComboBoxInfo(IntPtr window, ref COMBOBOXINFO info);

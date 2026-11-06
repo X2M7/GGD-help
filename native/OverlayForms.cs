@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 
 namespace GgdHelp
@@ -55,22 +54,33 @@ namespace GgdHelp
         {
             Text = "GGD-help · 透明底板"; Name = "card-background"; AccessibleName = Name;
             Exiting = true;
+            // Clip the window itself instead of combining color-key and alpha
+            // across a full display. An empty initial region prevents a dark
+            // full-screen frame before the first card layout is ready.
+            TransparencyKey = Color.Empty;
+            BackColor = CardPalette.Dark;
+            Region shape = new Region();
+            shape.MakeEmpty();
+            Region = shape;
         }
         public void UpdateCards(IEnumerable<Rectangle> values, double opacity)
         {
-            rectangles.Clear(); rectangles.AddRange(values);
-            Opacity = Math.Max(0.15, Math.Min(0.95, opacity / 100));
-            NativeWindows.SetClickThrough(this, true);
-            Invalidate();
-        }
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            base.OnPaint(e);
-            // Only card backplates are alpha blended. Foreground native controls
-            // live in the separate color-keyed window and retain readable text.
-            using (Brush fill = new SolidBrush(Color.FromArgb(13, 25, 34))) {
-                foreach (Rectangle rect in rectangles) e.Graphics.FillRectangle(fill, rect);
+            List<Rectangle> next = new List<Rectangle>(values);
+            bool changed = next.Count != rectangles.Count;
+            for (int i = 0; !changed && i < next.Count; i++) changed = next[i] != rectangles[i];
+            if (changed) {
+                Region shape = new Region();
+                shape.MakeEmpty();
+                foreach (Rectangle rect in next) shape.Union(rect);
+                Region previous = Region;
+                Region = shape;
+                if (previous != null) previous.Dispose();
+                rectangles.Clear(); rectangles.AddRange(next);
             }
+            double alpha = Math.Max(0.15, Math.Min(0.95, opacity / 100));
+            if (Math.Abs(Opacity - alpha) > 0.001) Opacity = alpha;
+            NativeWindows.SetClickThrough(this, true);
+            if (changed) Invalidate();
         }
     }
 }

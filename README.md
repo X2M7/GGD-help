@@ -1,26 +1,28 @@
 # GGD-help
 
-**V0.2.3 · Windows x64 鹅鸭杀透明会议蒙版，原生轻量版。** 基于 [snapea/goose-duck-help](https://github.com/snapea/goose-duck-help) 改进，保留原项目作者归属。直接透过蒙版查看游戏会议人物，在旁边记录身份、两条备注与死亡情况。
+**V0.2.4 · Windows x64 鹅鸭杀透明会议蒙版，原生轻量版。** 基于 [snapea/goose-duck-help](https://github.com/snapea/goose-duck-help) 改进，保留原项目作者归属。直接透过蒙版查看游戏会议人物，在旁边记录身份、两条备注与死亡情况。
 
 项目仓库：[X2M7/GGD-help](https://github.com/X2M7/GGD-help)。
 
 ## 下载与启动
 
-从 [V0.2.3 Releases](https://github.com/X2M7/GGD-help/releases/tag/V0.2.3) 下载 **GGD-help-V0.2.3-win-x64.exe**，双击即可运行。发布程序只有一个 exe，可离线运行；不需要安装 Node.js、Electron、WebView2 或下载浏览器组件。[历史 Releases](https://github.com/X2M7/GGD-help/releases) 保留旧版。
+从 [V0.2.4 Releases](https://github.com/X2M7/GGD-help/releases/tag/V0.2.4) 下载 **GGD-help-V0.2.4-win-x64.exe**，双击即可运行。发布程序只有一个 exe，可离线运行；不需要安装 Node.js、Electron、WebView2 或下载浏览器组件。[历史 Releases](https://github.com/X2M7/GGD-help/releases) 保留旧版。
 
 原生版使用 Windows Forms 和系统的 .NET Framework 4.x。正常安装的 Windows 10 / 11 已自带该运行环境，无需另外安装运行时；系统组件被精简或损坏的环境需要先修复。[微软的 Windows / .NET Framework 说明](https://learn.microsoft.com/en-us/dotnet/framework/install/on-windows-and-server)。本版本为 x64，未提供 32 位 Windows 版本。
 
-从源码目录启动时，可以双击 **启动助手.cmd**：存在 V0.2.3 exe 时直接启动，否则使用系统 C# 编译器在本地构建。发布 exe 不依赖源码目录。
+从源码目录启动时，可以双击 **启动助手.cmd**：存在 V0.2.4 exe 时直接启动，否则使用系统 C# 编译器在本地构建。发布 exe 不依赖源码目录。
 
 游戏请使用**无边框窗口或窗口模式**。独占全屏可能遮住桌面蒙版。助手覆盖你选择的显示器，没有自动跟随游戏窗口的功能，需要通过位置校准对齐。
 
 ## 体积优化
 
-从 V0.2.0 起，界面与窗口控制迁移到 C# / Windows Forms；当前 V0.2.3 单文件 exe 约 **98 KB**，V0.1.3 Electron 便携包为 **102.51 MB**。大幅缩小的原因是复用 Windows 自带的 .NET Framework，不再把完整 Chromium / Electron 运行环境装进发布包。程序启动也不再需要解包浏览器运行文件。
+从 V0.2.0 起，界面与窗口控制迁移到 C# / Windows Forms；当前 V0.2.4 单文件 exe 约 **98 KB**，V0.1.3 Electron 便携包为 **102.51 MB**。大幅缩小的原因是复用 Windows 自带的 .NET Framework，不再把完整 Chromium / Electron 运行环境装进发布包。程序启动也不再需要解包浏览器运行文件。
 
 保留透明蒙版、独立可移动开关、鼠标穿透、身份与备注、死亡记录、功能显示开关和布局校准。界面控件改用 Windows 原生控件，外观与 Electron 旧版有区别。
 
-下拉框、数字轮次框和箭头统一采用深色样式。身份区域现在只有两个联动下拉框：「阵营」和「具体身份」，为长角色名留出更宽的空间。数字框与相邻按钮居中对齐，小屏幕保留最小可操作尺寸。蒙版前景控件（含文字、按钮和备注）采用 90% 不透明度；记录卡底色仍可独立调节。展开的选项列表和设置窗口保持深色不透明，方便阅读。昵称区域继续完全留空。
+下拉框、数字轮次框和箭头统一采用深色样式。身份区域现在只有两个联动下拉框：「阵营」和「具体身份」，为长角色名留出更宽的空间。数字框与相邻按钮居中对齐，小屏幕保留最小可操作尺寸。从 V0.2.4 起，文字、按钮和备注采用不透明绘制，记录卡底色仍可独立调节透明度；这样可减少 Windows 合成透明控件时丢字和闪烁的问题。展开的选项列表和设置窗口保持深色不透明，方便阅读。昵称区域继续完全留空。
+
+V0.2.4 针对启动时只剩蒙版、文字不显示和选择框白点闪烁修复绘制流程：固定文字层在底板上方，底板只覆盖可见卡片，选择框和数字箭头在一次缓冲绘制中完成，不再先显示白色系统样式；数字框完整清理背景，避免空隙残留旧字符像素。保留原有记录、角色目录、位置校准和功能开关。
 
 V0.2.2 修复从悬浮菜单进入位置设置等操作时出现的 `ContextMenuStrip` 已释放异常。悬浮菜单和托盘菜单在关闭后继续复用，菜单命令在点击处理结束后执行，避免菜单关闭过程中被提前释放；已有记录和位置校准保留。
 
@@ -96,7 +98,7 @@ V0.2.3 按 Steam 版公告扩充至 79 项身份（好 34、中 11、坏 34）�
 
 从 V0.1.x 升级：
 
-1. **先完全退出旧版**，再启动 V0.2.3。
+1. **先完全退出旧版**，再启动 V0.2.4。
 2. 如果尚无 `native-state.json`，程序会尝试读取 `%APPDATA%\GGD-help` 中旧版 Electron 的记录。迁移只读旧文件，身份、两条备注、死亡记录和功能开关会迁入原生数据文件；原 Electron 数据保持不变。
 3. 旧版屏幕校准在分辨率与 DPI 唯一匹配时复用；无法唯一匹配的屏幕需要重新校准，原配置仍保留。
 4. 旧数据被占用或无法解析时会提示。可以退出、关闭旧版后重试，也可以明确选择以空白记录启动。需要恢复时可在设置中导入已导出的 JSON。
@@ -120,12 +122,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-native-menus.ps
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-native.ps1
 ```
 
-- `build-native.ps1`：编译 `native/*.cs`（不包含测试代码），生成 `release/GGD-help-V0.2.3-win-x64.exe` 和 `release/SHA256SUMS.txt`。
+- `build-native.ps1`：编译 `native/*.cs`（不包含测试代码），生成 `release/GGD-help-V0.2.4-win-x64.exe` 和 `release/SHA256SUMS.txt`。
 - `run-native.ps1`：启动原生 exe，不存在时先构建；加 `-Build` 强制重新构建。
 - `test-native-models.ps1`：检查身份目录、旧角色记录迁移、阵营选择持久化、比例坐标、功能开关、存储恢复与旧数据解析；可通过 `-Fixtures` 额外传入真实 Electron 迁移样本目录。
-- `test-native-components.ps1`：不显示窗口，检查阵营联动与角色过滤、控件缩放、功能开关、死亡轮次和输入状态。
+- `test-native-components.ps1`：不显示窗口，检查阵营联动与角色过滤、控件缩放、功能开关、死亡轮次、输入状态和选择框绘制。
 - `test-native-menus.ps1`：在独立 Windows 桌面使用隔离配置，检查悬浮菜单和托盘菜单的关闭、重复打开、设置、显示器切换和退出时机，不操作日常桌面。
-- `test-native.ps1`：把单个发布 exe 复制到独立临时目录，验证真实鼠标选择菜单、数字箭头与边界、中文输入、角色记录、功能开关、控件透明度、透明区域穿透、置顶、悬浮开关和重启保存。测试会使用桌面的鼠标和键盘，请勿同时操作；测试配置与日常记录分开，截图仅写入本地 `artifacts`。
+- `test-native.ps1`：把单个发布 exe 复制到独立临时目录，验证真实鼠标选择菜单、数字箭头与边界、中文输入、角色记录、功能开关、文字实际显示、底板透明度与层级、透明区域穿透、置顶、悬浮开关和重启保存。测试会使用桌面的鼠标和键盘，请勿同时操作；测试配置与日常记录分开，截图仅写入本地 `artifacts`。
 
 安装了 Node.js 时也可以使用 `npm start`、`npm run dist`、`npm test`、`npm run test:release`；这些默认命令都已指向原生版，其中 `npm start` 会先重新编译。
 
@@ -146,7 +148,7 @@ npm run dist:electron
 npm run test:release:electron
 ```
 
-Electron 目录包输出到 `out/GGD-help-win32-x64`；便携包输出到 `release/electron/GGD-help-Electron-V0.2.3-win-x64.exe`，与原生发布包分开保存。V0.2.3 Releases 提供的是原生轻量版。
+Electron 目录包输出到 `out/GGD-help-win32-x64`；便携包输出到 `release/electron/GGD-help-Electron-V0.2.4-win-x64.exe`，与原生发布包分开保存。V0.2.4 Releases 提供的是原生轻量版。
 
 已安装这些开发依赖时，可额外生成真实 Electron 存储样本，验证原生迁移器读取 WAL、压缩 SST、最新写入与删除记录。生成器只使用新建的临时配置，不读取日常记录：
 

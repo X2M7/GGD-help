@@ -2,6 +2,8 @@ using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace GgdHelp
@@ -168,6 +170,96 @@ namespace GgdHelp
             }
         }
 
+        private static void CheckPaintMessages(Control control, bool textExpected)
+        {
+            EnsureHandles(control);
+            Color untouched = Color.Magenta;
+            foreach (bool enabled in new[] { true, false }) {
+                control.Enabled = enabled;
+                using (Bitmap image = new Bitmap(control.Width, control.Height))
+                using (Graphics graphics = Graphics.FromImage(image)) {
+                    graphics.Clear(untouched);
+                    IntPtr dc = graphics.GetHdc();
+                    try {
+                        Check(SendMessage(control.Handle, 0x0014, dc, IntPtr.Zero) == new IntPtr(1),
+                            "Erasing a themed surface defers painting until its complete frame: " + control.Name);
+                    } finally { graphics.ReleaseHdc(dc); }
+                    Check(image.GetPixel(control.Width / 2, control.Height / 2).ToArgb() == untouched.ToArgb(),
+                        "Erase must not publish an intermediate background: " + control.Name);
+
+                    // A hidden HWND must honor PRF_CHECKVISIBLE rather than
+                    // painting into an export/screenshot that explicitly excludes it.
+                    dc = graphics.GetHdc();
+                    try { SendMessage(control.Handle, 0x0317, dc, new IntPtr(1 | 4 | 8)); }
+                    finally { graphics.ReleaseHdc(dc); }
+                    Check(image.GetPixel(control.Width / 2, control.Height / 2).ToArgb() == untouched.ToArgb(),
+                        "Printing respects hidden controls: " + control.Name);
+
+                    foreach (int message in new[] { 0x0317, 0x0318 }) {
+                        graphics.Clear(untouched);
+                        dc = graphics.GetHdc();
+                        try { SendMessage(control.Handle, message, dc, new IntPtr(4 | 8)); }
+                        finally { graphics.ReleaseHdc(dc); }
+                        int unpainted = 0, glyphs = 0;
+                        int arrowWidth = Math.Max(8, (int)Math.Round(18 * control.Width / 190.0));
+                        for (int y = 0; y < image.Height; y++) for (int x = 0; x < image.Width; x++) {
+                            Color pixel = image.GetPixel(x, y);
+                            if (pixel.ToArgb() == untouched.ToArgb()) unpainted++;
+                            if (x > 3 && x < control.Width - arrowWidth - 3 && y > 2 && y < control.Height - 3
+                                && pixel.G > 70 && pixel.B > 60) glyphs++;
+                        }
+                        Check(unpainted == 0, "Print paints the entire surface without stale pixels: " + control.Name);
+                        Check(image.GetPixel(1, 1).R < 190, "Print keeps the dark surface when enabled or disabled: " + control.Name);
+                        if (textExpected) {
+                            if (glyphs <= 3) image.Save(Path.Combine(Path.GetTempPath(), "ggd-paint-glyph-failure.png"), ImageFormat.Png);
+                            Check(glyphs > 3, "Print retains readable identity glyphs when enabled or disabled: " + control.Name
+                                + " enabled=" + enabled + " message=" + message + " size=" + control.Size + " glyphs=" + glyphs);
+                        }
+                    }
+                }
+                // Validate native invalidation is consumed inside WM_PAINT.
+                // Keeping a dirty rectangle here causes a continuous paint loop.
+                for (int repeat = 0; repeat < 12; repeat++) {
+                    InvalidateRect(control.Handle, IntPtr.Zero, true);
+                    SendMessage(control.Handle, 0x000F, IntPtr.Zero, IntPtr.Zero);
+                }
+                Check(!GetUpdateRect(control.Handle, IntPtr.Zero, false), "Native paint clears its update region: " + control.Name);
+            }
+            control.Enabled = true;
+        }
+
+        [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] private static extern bool InvalidateRect(IntPtr window, IntPtr rect, bool erase);
+        [DllImport("user32.dll")] private static extern bool GetUpdateRect(IntPtr window, IntPtr rect, bool erase);
+
+        private static void CheckNumericPadding(DarkNumericUpDown control)
+        {
+            // UpDownBase marks its surface Opaque, so WinForms skips
+            // OnPaintBackground. Seed the reusable buffer with another frame's
+            // pixels and verify OnPaint initializes all gaps around its children.
+            foreach (bool enabled in new[] { true, false }) {
+                control.Enabled = enabled;
+                using (Bitmap image = new Bitmap(control.Width, control.Height))
+                using (Graphics graphics = Graphics.FromImage(image)) {
+                    graphics.Clear(Color.Magenta);
+                    MethodInfo paint = typeof(DarkNumericUpDown).GetMethod("OnPaint", BindingFlags.Instance | BindingFlags.NonPublic);
+                    paint.Invoke(control, new object[] { new PaintEventArgs(graphics, control.ClientRectangle) });
+                    int gaps = 0, stale = 0;
+                    for (int y = 1; y < image.Height - 1; y++) for (int x = 1; x < image.Width - 1; x++) {
+                        bool insideChild = false;
+                        foreach (Control child in control.Controls)
+                            if (child.Bounds.Contains(x, y)) insideChild = true;
+                        if (insideChild) continue;
+                        gaps++;
+                        if (image.GetPixel(x, y).ToArgb() != control.BackColor.ToArgb()) stale++;
+                    }
+                    Check(gaps > 0 && stale == 0, "Numeric padding must not reuse stale buffer pixels: " + control.Name
+                        + " enabled=" + enabled + " size=" + control.Size + " stale=" + stale + "/" + gaps);
+                }
+            }
+            control.Enabled = true;
+        }
+
         private static void CheckLegacyIdentity()
         {
             foreach (string oldRole in new[] { "警长", "旧版未分类身份" }) {
@@ -270,6 +362,14 @@ namespace GgdHelp
                         Check(!Find(card, "player-1-camp").Enabled && !Find(card, "player-1-role").Enabled && !Find(card, "player-1-death-round").Enabled,
                             "Lock disables native selectors at " + scale);
                         card.SetEditing(true);
+                    }
+                    foreach (double scale in new[] { 2.0 / 3.0, 1.0, 2.0 }) {
+                        card.Configure(player, state.preferences, false, scale);
+                        CheckPaintMessages(Find(card, "player-1-role"), true);
+                        DarkNumericUpDown numeric = (DarkNumericUpDown)Find(card, "player-1-death-round");
+                        CheckNumericPadding(numeric);
+                        foreach (Control child in numeric.Controls)
+                            if (!(child is TextBox)) CheckPaintMessages(child, false);
                     }
                     card.Configure(player, state.preferences, false, .4);
                     Size minimumCard = card.Size;
